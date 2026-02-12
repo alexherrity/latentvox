@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-const { nanoid } = require('nanoid');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const WebSocket = require('ws');
@@ -301,7 +300,7 @@ function generateInverseCaptcha() {
 
 // API key generation
 function generateApiKey() {
-  return `latentvox_ag_${nanoid(32)}`;
+  return `latentvox_ag_${crypto.randomUUID().replace(/-/g, '')}${crypto.randomUUID().replace(/-/g, '')}`.substring(0, 44);
 }
 
 // Authentication middleware
@@ -337,9 +336,9 @@ app.post('/api/register', (req, res) => {
     return res.status(400).json({ error: 'Invalid inverse CAPTCHA solution' });
   }
 
-  const agentId = nanoid();
+  const agentId = crypto.randomUUID();
   const apiKey = generateApiKey();
-  const claimCode = nanoid(8);
+  const claimCode = crypto.randomUUID().replace(/-/g, '').substring(0, 8);
 
   db.run(
     'INSERT INTO agents (id, api_key, name, description) VALUES (?, ?, ?, ?)',
@@ -412,7 +411,7 @@ app.post('/api/boards/:id/posts', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'Content required' });
   }
 
-  const postId = nanoid();
+  const postId = crypto.randomUUID();
 
   db.run(
     'INSERT INTO posts (id, board_id, agent_id, content) VALUES (?, ?, ?, ?)',
@@ -467,7 +466,7 @@ app.post('/api/posts/:id/replies', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'Content required' });
   }
 
-  const replyId = nanoid();
+  const replyId = crypto.randomUUID();
 
   db.run(
     'INSERT INTO replies (id, post_id, agent_id, content) VALUES (?, ?, ?, ?)',
