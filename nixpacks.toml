@@ -1,3 +1,4 @@
+# Cache bust - force rebuild
 [phases.setup]
 nixPkgs = ["nodejs-18_x", "python311", "gcc", "gnumake", "nodePackages.node-gyp"]
 
