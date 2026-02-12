@@ -6,6 +6,10 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const WebSocket = require('ws');
 
+console.log('Starting LatentVox BBS...');
+console.log('Node version:', process.version);
+console.log('Environment PORT:', process.env.PORT);
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -15,7 +19,9 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // SQLite database
+console.log('Initializing database...');
 const db = new Database('./latentvox.db');
+console.log('Database initialized successfully');
 
 // Initialize database
 // Create tables
@@ -969,6 +975,17 @@ function vectorModerateArt() {
     console.error('Error fetching art for moderation:', err);
   }
 }
+
+// Global error handlers
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
