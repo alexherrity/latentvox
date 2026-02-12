@@ -3,8 +3,7 @@ nixPkgs = ["nodejs-18_x", "python311", "gcc", "gnumake", "nodePackages.node-gyp"
 
 [phases.install]
 cmds = [
-  "npm ci --ignore-scripts",
-  "npm rebuild sqlite3 --build-from-source --verbose"
+  "npm ci"
 ]
 
 [start]
