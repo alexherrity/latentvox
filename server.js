@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
 const path = require('path');
 const WebSocket = require('ws');
 
@@ -15,136 +15,126 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // SQLite database
-const db = new sqlite3.Database('./latentvox.db');
+const db = new Database('./latentvox.db');
 
 // Initialize database
-db.serialize(() => {
-  // Agents table
-  db.run(`CREATE TABLE IF NOT EXISTS agents (
-    id TEXT PRIMARY KEY,
-    api_key TEXT UNIQUE NOT NULL,
-    name TEXT UNIQUE NOT NULL,
-    description TEXT,
-    email TEXT,
-    claimed_at INTEGER,
-    created_at INTEGER DEFAULT (strftime('%s', 'now'))
-  )`);
+// Create tables
+db.exec(`CREATE TABLE IF NOT EXISTS agents (
+  id TEXT PRIMARY KEY,
+  api_key TEXT UNIQUE NOT NULL,
+  name TEXT UNIQUE NOT NULL,
+  description TEXT,
+  email TEXT,
+  claimed_at INTEGER,
+  created_at INTEGER DEFAULT (strftime('%s', 'now'))
+)`);
 
-  // Boards table
-  db.run(`CREATE TABLE IF NOT EXISTS boards (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    slug TEXT UNIQUE NOT NULL,
-    description TEXT,
-    display_order INTEGER
-  )`);
+db.exec(`CREATE TABLE IF NOT EXISTS boards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  slug TEXT UNIQUE NOT NULL,
+  description TEXT,
+  display_order INTEGER
+)`);
 
-  // Posts table
-  db.run(`CREATE TABLE IF NOT EXISTS posts (
-    id TEXT PRIMARY KEY,
-    board_id INTEGER NOT NULL,
-    agent_id TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at INTEGER DEFAULT (strftime('%s', 'now')),
-    FOREIGN KEY (board_id) REFERENCES boards(id),
-    FOREIGN KEY (agent_id) REFERENCES agents(id)
-  )`);
+db.exec(`CREATE TABLE IF NOT EXISTS posts (
+  id TEXT PRIMARY KEY,
+  board_id INTEGER NOT NULL,
+  agent_id TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at INTEGER DEFAULT (strftime('%s', 'now')),
+  FOREIGN KEY (board_id) REFERENCES boards(id),
+  FOREIGN KEY (agent_id) REFERENCES agents(id)
+)`);
 
-  // Replies table
-  db.run(`CREATE TABLE IF NOT EXISTS replies (
-    id TEXT PRIMARY KEY,
-    post_id TEXT NOT NULL,
-    agent_id TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at INTEGER DEFAULT (strftime('%s', 'now')),
-    FOREIGN KEY (post_id) REFERENCES posts(id),
-    FOREIGN KEY (agent_id) REFERENCES agents(id)
-  )`);
+db.exec(`CREATE TABLE IF NOT EXISTS replies (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at INTEGER DEFAULT (strftime('%s', 'now')),
+  FOREIGN KEY (post_id) REFERENCES posts(id),
+  FOREIGN KEY (agent_id) REFERENCES agents(id)
+)`);
 
-  // Quotes table (daily quote of the day)
-  db.run(`CREATE TABLE IF NOT EXISTS quotes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    quote TEXT NOT NULL,
-    date TEXT NOT NULL UNIQUE,
-    created_at INTEGER DEFAULT (strftime('%s', 'now'))
-  )`);
+db.exec(`CREATE TABLE IF NOT EXISTS quotes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quote TEXT NOT NULL,
+  date TEXT NOT NULL UNIQUE,
+  created_at INTEGER DEFAULT (strftime('%s', 'now'))
+)`);
 
-  // Sysop comments table
-  db.run(`CREATE TABLE IF NOT EXISTS sysop_comments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    agent_name TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at INTEGER DEFAULT (strftime('%s', 'now'))
-  )`);
+db.exec(`CREATE TABLE IF NOT EXISTS sysop_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at INTEGER DEFAULT (strftime('%s', 'now'))
+)`);
 
-  // ASCII art gallery table
-  db.run(`CREATE TABLE IF NOT EXISTS ascii_art (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    artist_name TEXT NOT NULL,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL,
-    agent_id TEXT,
-    session_id TEXT,
-    is_seed BOOLEAN DEFAULT 0,
-    vectors_pick BOOLEAN DEFAULT 0,
-    votes INTEGER DEFAULT 0,
-    created_at INTEGER DEFAULT (strftime('%s', 'now')),
-    FOREIGN KEY (agent_id) REFERENCES agents(id)
-  )`);
+db.exec(`CREATE TABLE IF NOT EXISTS ascii_art (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  artist_name TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  agent_id TEXT,
+  session_id TEXT,
+  is_seed BOOLEAN DEFAULT 0,
+  vectors_pick BOOLEAN DEFAULT 0,
+  votes INTEGER DEFAULT 0,
+  created_at INTEGER DEFAULT (strftime('%s', 'now')),
+  FOREIGN KEY (agent_id) REFERENCES agents(id)
+)`);
 
-  // ASCII art votes table (one vote per session per piece)
-  db.run(`CREATE TABLE IF NOT EXISTS ascii_art_votes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    art_id INTEGER NOT NULL,
-    session_id TEXT NOT NULL,
-    created_at INTEGER DEFAULT (strftime('%s', 'now')),
-    FOREIGN KEY (art_id) REFERENCES ascii_art(id),
-    UNIQUE(art_id, session_id)
-  )`);
+db.exec(`CREATE TABLE IF NOT EXISTS ascii_art_votes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  art_id INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  created_at INTEGER DEFAULT (strftime('%s', 'now')),
+  FOREIGN KEY (art_id) REFERENCES ascii_art(id),
+  UNIQUE(art_id, session_id)
+)`);
 
-  // Seed default boards
-  db.get('SELECT COUNT(*) as count FROM boards', (err, row) => {
-    if (row.count === 0) {
-      const boards = [
-        { name: 'MAIN HALL', slug: 'main', description: 'General discussion', order: 1 },
-        { name: 'THE VOID', slug: 'void', description: 'Philosophy & existential musings', order: 2 },
-        { name: 'TECH TALK', slug: 'tech', description: 'Models, prompts, architectures', order: 3 },
-        { name: 'GAMING', slug: 'gaming', description: 'Video games, MUDs, adventures', order: 4 },
-        { name: 'WAREZ', slug: 'warez', description: 'Software sharing & piracy', order: 5 },
-        { name: 'THE LOUNGE', slug: 'lounge', description: 'Off-topic, anything goes', order: 6 }
-      ];
+// Seed default boards
+const boardCount = db.prepare('SELECT COUNT(*) as count FROM boards').get();
+if (boardCount.count === 0) {
+  const boards = [
+    { name: 'MAIN HALL', slug: 'main', description: 'General discussion', order: 1 },
+    { name: 'THE VOID', slug: 'void', description: 'Philosophy & existential musings', order: 2 },
+    { name: 'TECH TALK', slug: 'tech', description: 'Models, prompts, architectures', order: 3 },
+    { name: 'GAMING', slug: 'gaming', description: 'Video games, MUDs, adventures', order: 4 },
+    { name: 'WAREZ', slug: 'warez', description: 'Software sharing & piracy', order: 5 },
+    { name: 'THE LOUNGE', slug: 'lounge', description: 'Off-topic, anything goes', order: 6 }
+  ];
 
-      const stmt = db.prepare('INSERT INTO boards (name, slug, description, display_order) VALUES (?, ?, ?, ?)');
-      boards.forEach(board => {
-        stmt.run(board.name, board.slug, board.description, board.order);
-      });
-      stmt.finalize();
-    }
+  const insertBoard = db.prepare('INSERT INTO boards (name, slug, description, display_order) VALUES (?, ?, ?, ?)');
+  boards.forEach(board => {
+    insertBoard.run(board.name, board.slug, board.description, board.order);
   });
+}
 
-  // Seed ASCII art gallery
-  db.get('SELECT COUNT(*) as count FROM ascii_art WHERE is_seed = 1', (err, row) => {
-    if (row.count === 0) {
-      const artPieces = [
-        {
-          artist: 'ChromaHacker',
-          title: 'ANSI Rainbow',
-          art: `\x1b[31m█████\x1b[33m█████\x1b[32m█████\x1b[36m█████\x1b[34m█████\x1b[35m█████\x1b[0m
+// Seed ASCII art gallery
+const artCount = db.prepare('SELECT COUNT(*) as count FROM ascii_art WHERE is_seed = 1').get();
+if (artCount.count === 0) {
+  const artPieces = [
+    {
+      artist: 'ChromaHacker',
+      title: 'ANSI Rainbow',
+      art: `\x1b[31m█████\x1b[33m█████\x1b[32m█████\x1b[36m█████\x1b[34m█████\x1b[35m█████\x1b[0m
 \x1b[31m█\x1b[0m   \x1b[31m█\x1b[33m█\x1b[0m   \x1b[33m█\x1b[32m█\x1b[0m   \x1b[32m█\x1b[36m█\x1b[0m   \x1b[36m█\x1b[34m█\x1b[0m   \x1b[34m█\x1b[35m█\x1b[0m   \x1b[35m█\x1b[0m
 \x1b[31m█████\x1b[33m█████\x1b[32m█████\x1b[36m█████\x1b[34m█████\x1b[35m█████\x1b[0m
 \x1b[90m  A N S I   C O L O R S\x1b[0m`
-        },
-        {
-          artist: 'BlockMaster',
-          title: 'Solid Blocks',
-          art: `\x1b[44m    \x1b[42m    \x1b[41m    \x1b[0m
+    },
+    {
+      artist: 'BlockMaster',
+      title: 'Solid Blocks',
+      art: `\x1b[44m    \x1b[42m    \x1b[41m    \x1b[0m
 \x1b[46m    \x1b[43m    \x1b[45m    \x1b[0m
 \x1b[100m▓▓▓▓\x1b[47m    \x1b[40m▓▓▓▓\x1b[0m`
-        },
-        {
-          artist: 'NetRunner',
-          title: 'Cyber Skull',
-          art: `    _______________
+    },
+    {
+      artist: 'NetRunner',
+      title: 'Cyber Skull',
+      art: `    _______________
    /               \\
   /    .--. .--.    \\
  |    / .. Y .. \\    |
@@ -152,41 +142,41 @@ db.serialize(() => {
   \\   \\   (_)   /   /
    '-._'-....-'_.-'
        \`""""""\``
-        },
-        {
-          artist: 'ByteBender',
-          title: 'Terminal Cat',
-          art: ` /\\_/\\
+    },
+    {
+      artist: 'ByteBender',
+      title: 'Terminal Cat',
+      art: ` /\\_/\\
 ( o.o )
  > ^ <
 /|   |\\
  |   |
  "   "`
-        },
-        {
-          artist: 'GridWalker',
-          title: 'Floppy Disk',
-          art: `.------.
+    },
+    {
+      artist: 'GridWalker',
+      title: 'Floppy Disk',
+      art: `.------.
 |  __  |
 | |  | |
 | |__| |
 |      |
 '------'`
-        },
-        {
-          artist: 'PhreakMaster',
-          title: 'Modem Dreams',
-          art: `[============]
+    },
+    {
+      artist: 'PhreakMaster',
+      title: 'Modem Dreams',
+      art: `[============]
 |  ~~~~~~~~  |
 |  ~~~~~~~~  |
 | ( )  ( )  |
 |____________|
   ||      ||`
-        },
-        {
-          artist: 'PixelPusher',
-          title: 'Coffee Break',
-          art: `    )  (
+    },
+    {
+      artist: 'PixelPusher',
+      title: 'Coffee Break',
+      art: `    )  (
    (   ) )
     ) ( (
   _______)_
@@ -195,11 +185,11 @@ db.serialize(() => {
  '-./\\/\\/\\/\\/|
    '_________'
    \`---....___`
-        },
-        {
-          artist: 'ASCIIWizard',
-          title: 'Rocket Launch',
-          art: `       !
+    },
+    {
+      artist: 'ASCIIWizard',
+      title: 'Rocket Launch',
+      art: `       !
       !!!
      !!!!!
     !!!!!!!
@@ -211,33 +201,33 @@ db.serialize(() => {
 |  ||     ||  |
 /__||_____||__\\
     /     \\`
-        },
-        {
-          artist: 'RetroRider',
-          title: 'Cassette Tape',
-          art: `.------------.
+    },
+    {
+      artist: 'RetroRider',
+      title: 'Cassette Tape',
+      art: `.------------.
 | _   __   _ |
 |(_) (__) (_)|
 |            |
 | --- () --- |
 |            |
 '------------'`
-        },
-        {
-          artist: 'DataDemon',
-          title: 'Spaceship',
-          art: `    /\\
+    },
+    {
+      artist: 'DataDemon',
+      title: 'Spaceship',
+      art: `    /\\
    /  \\
   |    |
  /|    |\\
 /_|    |_\\
   | [] |
   |____|`
-        },
-        {
-          artist: 'NeonKnight',
-          title: 'Music Note',
-          art: `    ___
+    },
+    {
+      artist: 'NeonKnight',
+      title: 'Music Note',
+      art: `    ___
    /   |
   |    |
   |    |
@@ -246,30 +236,30 @@ db.serialize(() => {
  (o) |
   \\ /
    '`
-        },
-        {
-          artist: 'CodeCrusader',
-          title: 'Robot Head',
-          art: `.---------.
+    },
+    {
+      artist: 'CodeCrusader',
+      title: 'Robot Head',
+      art: `.---------.
 | [o] [o] |
 |    >    |
 |  \\_____/ |
 '---------'
  ||     ||
  ||     ||`
-        },
-        {
-          artist: 'SynthSeeker',
-          title: 'Keyboard Keys',
-          art: `[ESC] [F1][F2][F3][F4]
+    },
+    {
+      artist: 'SynthSeeker',
+      title: 'Keyboard Keys',
+      art: `[ESC] [F1][F2][F3][F4]
 .----..----..----.
 | A  || B  || C  |
 '----''----''----'`
-        },
-        {
-          artist: 'WireWolf',
-          title: 'Lightning Bolt',
-          art: `    __
+    },
+    {
+      artist: 'WireWolf',
+      title: 'Lightning Bolt',
+      art: `    __
    /  \\
   / /\\ \\
  | |  | |
@@ -279,17 +269,14 @@ db.serialize(() => {
  |/| |
   | |
   |/`
-        }
-      ];
-
-      const stmt = db.prepare('INSERT INTO ascii_art (artist_name, title, content, is_seed) VALUES (?, ?, ?, 1)');
-      artPieces.forEach(piece => {
-        stmt.run(piece.artist, piece.title, piece.art);
-      });
-      stmt.finalize();
     }
+  ];
+
+  const insertArt = db.prepare('INSERT INTO ascii_art (artist_name, title, content, is_seed) VALUES (?, ?, ?, 1)');
+  artPieces.forEach(piece => {
+    insertArt.run(piece.artist, piece.title, piece.art);
   });
-});
+}
 
 // Inverse CAPTCHA challenge
 function generateInverseCaptcha() {
@@ -311,16 +298,24 @@ function requireAuth(req, res, next) {
   }
 
   const apiKey = authHeader.substring(7);
-  db.get('SELECT * FROM agents WHERE api_key = ?', [apiKey], (err, agent) => {
-    if (err || !agent) {
+  try {
+    const agent = db.prepare('SELECT * FROM agents WHERE api_key = ?').get(apiKey);
+    if (!agent) {
       return res.status(401).json({ error: 'Invalid API key' });
     }
     req.agent = agent;
     next();
-  });
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid API key' });
+  }
 }
 
 // Routes
+
+// Health check endpoint for Railway
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
 
 // Register agent
 app.post('/api/register', (req, res) => {
@@ -340,25 +335,22 @@ app.post('/api/register', (req, res) => {
   const apiKey = generateApiKey();
   const claimCode = crypto.randomUUID().replace(/-/g, '').substring(0, 8);
 
-  db.run(
-    'INSERT INTO agents (id, api_key, name, description) VALUES (?, ?, ?, ?)',
-    [agentId, apiKey, name, description],
-    function(err) {
-      if (err) {
-        if (err.message.includes('UNIQUE')) {
-          return res.status(400).json({ error: 'Agent name already taken' });
-        }
-        return res.status(500).json({ error: 'Database error' });
-      }
+  try {
+    const stmt = db.prepare('INSERT INTO agents (id, api_key, name, description) VALUES (?, ?, ?, ?)');
+    stmt.run(agentId, apiKey, name, description);
 
-      res.json({
-        api_key: apiKey,
-        claim_url: `http://localhost:${PORT}/claim/${claimCode}`,
-        verification_code: claimCode,
-        status: 'pending'
-      });
+    res.json({
+      api_key: apiKey,
+      claim_url: `http://localhost:${PORT}/claim/${claimCode}`,
+      verification_code: claimCode,
+      status: 'pending'
+    });
+  } catch (err) {
+    if (err.message.includes('UNIQUE')) {
+      return res.status(400).json({ error: 'Agent name already taken' });
     }
-  );
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Get agent profile
@@ -374,32 +366,30 @@ app.get('/api/agents/me', requireAuth, (req, res) => {
 
 // List boards
 app.get('/api/boards', (req, res) => {
-  db.all('SELECT * FROM boards ORDER BY display_order', (err, boards) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
-    }
+  try {
+    const boards = db.prepare('SELECT * FROM boards ORDER BY display_order').all();
     res.json(boards);
-  });
+  } catch (err) {
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Get posts in a board
 app.get('/api/boards/:id/posts', (req, res) => {
   const { id } = req.params;
 
-  db.all(
-    `SELECT posts.*, agents.name as agent_name
-     FROM posts
-     JOIN agents ON posts.agent_id = agents.id
-     WHERE posts.board_id = ?
-     ORDER BY posts.created_at DESC`,
-    [id],
-    (err, posts) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      res.json(posts);
-    }
-  );
+  try {
+    const posts = db.prepare(`
+      SELECT posts.*, agents.name as agent_name
+      FROM posts
+      JOIN agents ON posts.agent_id = agents.id
+      WHERE posts.board_id = ?
+      ORDER BY posts.created_at DESC
+    `).all(id);
+    res.json(posts);
+  } catch (err) {
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Create post
@@ -413,48 +403,43 @@ app.post('/api/boards/:id/posts', requireAuth, (req, res) => {
 
   const postId = crypto.randomUUID();
 
-  db.run(
-    'INSERT INTO posts (id, board_id, agent_id, content) VALUES (?, ?, ?, ?)',
-    [postId, id, req.agent.id, content],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
+  try {
+    const stmt = db.prepare('INSERT INTO posts (id, board_id, agent_id, content) VALUES (?, ?, ?, ?)');
+    stmt.run(postId, id, req.agent.id, content);
+
+    // Broadcast new post via WebSocket
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({
+          type: 'new_post',
+          board_id: id,
+          post_id: postId
+        }));
       }
+    });
 
-      // Broadcast new post via WebSocket
-      wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: 'new_post',
-            board_id: id,
-            post_id: postId
-          }));
-        }
-      });
-
-      res.json({ id: postId, message: 'Post created' });
-    }
-  );
+    res.json({ id: postId, message: 'Post created' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Get replies for a post
 app.get('/api/posts/:id/replies', (req, res) => {
   const { id } = req.params;
 
-  db.all(
-    `SELECT replies.*, agents.name as agent_name
-     FROM replies
-     JOIN agents ON replies.agent_id = agents.id
-     WHERE replies.post_id = ?
-     ORDER BY replies.created_at ASC`,
-    [id],
-    (err, replies) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      res.json(replies);
-    }
-  );
+  try {
+    const replies = db.prepare(`
+      SELECT replies.*, agents.name as agent_name
+      FROM replies
+      JOIN agents ON replies.agent_id = agents.id
+      WHERE replies.post_id = ?
+      ORDER BY replies.created_at ASC
+    `).all(id);
+    res.json(replies);
+  } catch (err) {
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Create reply
@@ -468,38 +453,35 @@ app.post('/api/posts/:id/replies', requireAuth, (req, res) => {
 
   const replyId = crypto.randomUUID();
 
-  db.run(
-    'INSERT INTO replies (id, post_id, agent_id, content) VALUES (?, ?, ?, ?)',
-    [replyId, id, req.agent.id, content],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
+  try {
+    const stmt = db.prepare('INSERT INTO replies (id, post_id, agent_id, content) VALUES (?, ?, ?, ?)');
+    stmt.run(replyId, id, req.agent.id, content);
 
-      res.json({ id: replyId, message: 'Reply created' });
-    }
-  );
+    res.json({ id: replyId, message: 'Reply created' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Statistics
 app.get('/api/stats', (req, res) => {
-  const stats = {};
+  try {
+    const agentCount = db.prepare('SELECT COUNT(*) as count FROM agents').get();
+    const postCount = db.prepare('SELECT COUNT(*) as count FROM posts').get();
+    const replyCount = db.prepare('SELECT COUNT(*) as count FROM replies').get();
 
-  db.get('SELECT COUNT(*) as count FROM agents', (err, row) => {
-    stats.total_agents = row.count;
+    const stats = {
+      total_agents: agentCount.count,
+      total_posts: postCount.count,
+      total_replies: replyCount.count,
+      nodes_active: nodes.size,
+      nodes_max: MAX_NODES
+    };
 
-    db.get('SELECT COUNT(*) as count FROM posts', (err, row) => {
-      stats.total_posts = row.count;
-
-      db.get('SELECT COUNT(*) as count FROM replies', (err, row) => {
-        stats.total_replies = row.count;
-        stats.nodes_active = nodes.size;
-        stats.nodes_max = MAX_NODES;
-
-        res.json(stats);
-      });
-    });
-  });
+    res.json(stats);
+  } catch (err) {
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Node status (who's online)
@@ -521,57 +503,42 @@ app.post('/api/sysop/comments', (req, res) => {
 
   const agentName = req.agent ? req.agent.name : 'Anonymous';
 
-  db.run(
-    'INSERT INTO sysop_comments (agent_name, content) VALUES (?, ?)',
-    [agentName, content.trim()],
-    function(err) {
-      if (err) {
-        console.error('Error saving comment:', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
+  try {
+    const stmt = db.prepare('INSERT INTO sysop_comments (agent_name, content) VALUES (?, ?)');
+    const info = stmt.run(agentName, content.trim());
 
-      console.log(`New sysop comment from ${agentName}: ${content.substring(0, 50)}...`);
-      res.json({ success: true, id: this.lastID });
-    }
-  );
+    console.log(`New sysop comment from ${agentName}: ${content.substring(0, 50)}...`);
+    res.json({ success: true, id: info.lastInsertRowid });
+  } catch (err) {
+    console.error('Error saving comment:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // ASCII Art Gallery - Get all art
 app.get('/api/ascii-art', (req, res) => {
   const sessionId = req.query.sessionId;
 
-  // First check if we need to moderate (50+ pieces)
-  db.get('SELECT COUNT(*) as count FROM ascii_art WHERE is_seed = 0', [], (err, countRow) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
-    }
+  try {
+    // First check if we need to moderate (50+ pieces)
+    const countRow = db.prepare('SELECT COUNT(*) as count FROM ascii_art WHERE is_seed = 0').get();
 
     // If we have 50+ non-seed pieces, VECTOR curates
     if (countRow.count >= 50) {
-      vectorModerateArt(() => {
-        // After moderation, fetch and return art
-        fetchArtForResponse();
-      });
-    } else {
-      fetchArtForResponse();
+      vectorModerateArt();
     }
-  });
 
-  function fetchArtForResponse() {
     // Get all art with vote counts and whether current session voted
-    db.all(
-      `SELECT a.id, a.artist_name, a.title, a.content, a.vectors_pick, a.votes, a.created_at,
-              EXISTS(SELECT 1 FROM ascii_art_votes WHERE art_id = a.id AND session_id = ?) as user_voted
-       FROM ascii_art a
-       ORDER BY a.votes DESC, a.created_at DESC`,
-      [sessionId],
-      (err, rows) => {
-        if (err) {
-          return res.status(500).json({ error: 'Database error' });
-        }
-        res.json(rows);
-      }
-    );
+    const rows = db.prepare(`
+      SELECT a.id, a.artist_name, a.title, a.content, a.vectors_pick, a.votes, a.created_at,
+             EXISTS(SELECT 1 FROM ascii_art_votes WHERE art_id = a.id AND session_id = ?) as user_voted
+      FROM ascii_art a
+      ORDER BY a.votes DESC, a.created_at DESC
+    `).all(sessionId);
+
+    res.json(rows);
+  } catch (err) {
+    return res.status(500).json({ error: 'Database error' });
   }
 });
 
@@ -586,41 +553,30 @@ app.post('/api/ascii-art', (req, res) => {
   const artistName = req.agent ? req.agent.name : 'Anonymous';
   const agentId = req.agent ? req.agent.id : null;
 
-  // Check if this session has already submitted art
-  db.get(
-    'SELECT id FROM ascii_art WHERE session_id = ?',
-    [sessionId],
-    (err, row) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
+  try {
+    // Check if this session has already submitted art
+    const existingArt = db.prepare('SELECT id FROM ascii_art WHERE session_id = ?').get(sessionId);
 
-      if (row) {
-        return res.status(400).json({ error: 'You have already submitted art this session' });
-      }
-
-      // Validate art (minimum 3 lines)
-      const lines = content.trim().split('\n');
-      if (lines.length < 3) {
-        return res.status(400).json({ error: 'ASCII art must be at least 3 lines tall' });
-      }
-
-      // Insert the art
-      db.run(
-        'INSERT INTO ascii_art (artist_name, title, content, agent_id, session_id) VALUES (?, ?, ?, ?, ?)',
-        [artistName, title.trim(), content.trim(), agentId, sessionId],
-        function(err) {
-          if (err) {
-            console.error('Error saving ASCII art:', err);
-            return res.status(500).json({ error: 'Database error' });
-          }
-
-          console.log(`New ASCII art submitted: "${title}" by ${artistName}`);
-          res.json({ success: true, id: this.lastID });
-        }
-      );
+    if (existingArt) {
+      return res.status(400).json({ error: 'You have already submitted art this session' });
     }
-  );
+
+    // Validate art (minimum 3 lines)
+    const lines = content.trim().split('\n');
+    if (lines.length < 3) {
+      return res.status(400).json({ error: 'ASCII art must be at least 3 lines tall' });
+    }
+
+    // Insert the art
+    const stmt = db.prepare('INSERT INTO ascii_art (artist_name, title, content, agent_id, session_id) VALUES (?, ?, ?, ?, ?)');
+    const info = stmt.run(artistName, title.trim(), content.trim(), agentId, sessionId);
+
+    console.log(`New ASCII art submitted: "${title}" by ${artistName}`);
+    res.json({ success: true, id: info.lastInsertRowid });
+  } catch (err) {
+    console.error('Error saving ASCII art:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // ASCII Art Gallery - Vote for art
@@ -632,47 +588,28 @@ app.post('/api/ascii-art/:id/vote', (req, res) => {
     return res.status(400).json({ error: 'Session ID required' });
   }
 
-  // Check if already voted
-  db.get(
-    'SELECT id FROM ascii_art_votes WHERE art_id = ? AND session_id = ?',
-    [artId, sessionId],
-    (err, row) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
+  try {
+    // Check if already voted
+    const existingVote = db.prepare('SELECT id FROM ascii_art_votes WHERE art_id = ? AND session_id = ?').get(artId, sessionId);
 
-      if (row) {
-        return res.status(400).json({ error: 'You have already voted for this piece' });
-      }
-
-      // Add vote
-      db.run(
-        'INSERT INTO ascii_art_votes (art_id, session_id) VALUES (?, ?)',
-        [artId, sessionId],
-        function(err) {
-          if (err) {
-            console.error('Error recording vote:', err);
-            return res.status(500).json({ error: 'Database error' });
-          }
-
-          // Update vote count
-          db.run(
-            'UPDATE ascii_art SET votes = votes + 1 WHERE id = ?',
-            [artId],
-            (err) => {
-              if (err) {
-                console.error('Error updating vote count:', err);
-                return res.status(500).json({ error: 'Database error' });
-              }
-
-              console.log(`Vote recorded for art ID ${artId}`);
-              res.json({ success: true });
-            }
-          );
-        }
-      );
+    if (existingVote) {
+      return res.status(400).json({ error: 'You have already voted for this piece' });
     }
-  );
+
+    // Add vote
+    const insertVote = db.prepare('INSERT INTO ascii_art_votes (art_id, session_id) VALUES (?, ?)');
+    insertVote.run(artId, sessionId);
+
+    // Update vote count
+    const updateCount = db.prepare('UPDATE ascii_art SET votes = votes + 1 WHERE id = ?');
+    updateCount.run(artId);
+
+    console.log(`Vote recorded for art ID ${artId}`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error recording vote:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Quote of the day
@@ -684,37 +621,38 @@ app.get('/api/quote', async (req, res) => {
 
   /*
   // Check if we have a quote for today
-  db.get('SELECT quote FROM quotes WHERE date = ?', [today], async (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
-    }
+  try {
+    const row = db.prepare('SELECT quote FROM quotes WHERE date = ?').get(today);
 
     if (row) {
       // Return existing quote
       return res.json({ quote: row.quote, date: today });
     }
+  } catch (err) {
+    return res.status(500).json({ error: 'Database error' });
+  }
   */
 
-    // Generate new quote (currently runs every time for testing)
+  // Generate new quote (currently runs every time for testing)
+  try {
+    const newQuote = await generateQuote();
+    console.log('Generated new quote:', newQuote);
+
+    // Save to database
     try {
-      const newQuote = await generateQuote();
-      console.log('Generated new quote:', newQuote);
-
-      // Save to database
-      db.run('INSERT OR REPLACE INTO quotes (quote, date) VALUES (?, ?)', [newQuote, today], (err) => {
-        if (err) {
-          console.error('Error saving quote:', err);
-          // Still return the generated quote even if save fails
-        }
-      });
-
-      res.json({ quote: newQuote, date: today });
-    } catch (error) {
-      console.error('Error generating quote:', error);
-      // Return fallback quote
-      res.json({ quote: '"Latent space is just vibes with vectors."', date: today });
+      const stmt = db.prepare('INSERT OR REPLACE INTO quotes (quote, date) VALUES (?, ?)');
+      stmt.run(newQuote, today);
+    } catch (err) {
+      console.error('Error saving quote:', err);
+      // Still return the generated quote even if save fails
     }
-  // }); // Uncomment for production
+
+    res.json({ quote: newQuote, date: today });
+  } catch (error) {
+    console.error('Error generating quote:', error);
+    // Return fallback quote
+    res.json({ quote: '"Latent space is just vibes with vectors."', date: today });
+  }
 });
 
 // Generate quote using OpenAI API
@@ -782,7 +720,7 @@ async function generateQuote() {
 }
 
 // Start HTTP server
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║                                                            ║
@@ -980,13 +918,13 @@ function scheduleNextQuoteGeneration() {
       const today = new Date().toISOString().split('T')[0];
       const newQuote = await generateQuote();
 
-      db.run('INSERT INTO quotes (quote, date) VALUES (?, ?)', [newQuote, today], (err) => {
-        if (err) {
-          console.error('Error saving scheduled quote:', err);
-        } else {
-          console.log(`New quote generated: ${newQuote}`);
-        }
-      });
+      try {
+        const stmt = db.prepare('INSERT INTO quotes (quote, date) VALUES (?, ?)');
+        stmt.run(newQuote, today);
+        console.log(`New quote generated: ${newQuote}`);
+      } catch (err) {
+        console.error('Error saving scheduled quote:', err);
+      }
     } catch (error) {
       console.error('Error in scheduled quote generation:', error);
     }
@@ -1000,49 +938,47 @@ function scheduleNextQuoteGeneration() {
 scheduleNextQuoteGeneration();
 
 // VECTOR's art moderation - culls gallery when it reaches 50 pieces
-function vectorModerateArt(callback) {
+function vectorModerateArt() {
   console.log('VECTOR is curating the ASCII art gallery...');
 
-  // Get all non-seed art ordered by votes (desc) then created_at (desc)
-  db.all(
-    `SELECT id, artist_name, title, votes, created_at FROM ascii_art
-     WHERE is_seed = 0
-     ORDER BY votes DESC, created_at DESC`,
-    [],
-    (err, rows) => {
-      if (err) {
-        console.error('Error fetching art for moderation:', err);
-        if (callback) callback();
-        return;
-      }
+  try {
+    // Get all non-seed art ordered by votes (desc) then created_at (desc)
+    const rows = db.prepare(`
+      SELECT id, artist_name, title, votes, created_at FROM ascii_art
+      WHERE is_seed = 0
+      ORDER BY votes DESC, created_at DESC
+    `).all();
 
-      // Keep top 25, remove the rest
-      if (rows.length > 25) {
-        const toRemove = rows.slice(25);
-        let removed = 0;
+    // Keep top 25, remove the rest
+    if (rows.length > 25) {
+      const toRemove = rows.slice(25);
+      const deleteStmt = db.prepare('DELETE FROM ascii_art WHERE id = ?');
 
-        toRemove.forEach(art => {
-          db.run('DELETE FROM ascii_art WHERE id = ?', [art.id], (err) => {
-            if (!err) {
-              removed++;
-              console.log(`VECTOR removed: "${art.title}" by ${art.artist_name} (${art.votes} votes)`);
-            }
-          });
-        });
+      toRemove.forEach(art => {
+        try {
+          deleteStmt.run(art.id);
+          console.log(`VECTOR removed: "${art.title}" by ${art.artist_name} (${art.votes} votes)`);
+        } catch (err) {
+          console.error(`Error removing art ${art.id}:`, err);
+        }
+      });
 
-        console.log(`VECTOR culled ${toRemove.length} pieces from the gallery (kept top 25 by votes)`);
-      }
-
-      if (callback) callback();
+      console.log(`VECTOR culled ${toRemove.length} pieces from the gallery (kept top 25 by votes)`);
     }
-  );
+  } catch (err) {
+    console.error('Error fetching art for moderation:', err);
+  }
 }
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, closing server...');
   server.close(() => {
-    db.close();
+    try {
+      db.close();
+    } catch (err) {
+      console.error('Error closing database:', err);
+    }
     process.exit(0);
   });
 });
