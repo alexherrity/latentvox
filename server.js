@@ -726,7 +726,9 @@ async function generateQuote() {
 }
 
 // Start HTTP server
+console.log('Starting HTTP server...');
 const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log('HTTP server listening on port', PORT);
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║                                                            ║
