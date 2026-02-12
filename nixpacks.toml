@@ -8,4 +8,4 @@ cmds = [
 ]
 
 [start]
-cmd = "node test-server.js"
+cmd = "node server.js"
