@@ -9,6 +9,7 @@ const WebSocket = require('ws');
 console.log('Starting LatentVox BBS...');
 console.log('Node version:', process.version);
 console.log('Environment PORT:', process.env.PORT);
+console.log('OPENAI_API_KEY set:', !!process.env.OPENAI_API_KEY);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
