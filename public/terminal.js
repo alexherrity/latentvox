@@ -67,6 +67,9 @@ const term = new Terminal({
   cursorBlink: true,
   fontSize: fontSize,
   fontFamily: '"Courier New", monospace',
+  allowTransparency: false,
+  convertEol: false,
+  rendererType: 'canvas', // Force canvas renderer for consistency
   theme: {
     background: '#000000',
     foreground: '#00ff00',
@@ -100,6 +103,15 @@ if (loadingEl) loadingEl.style.display = 'block';
 const container = document.getElementById('terminal-container');
 term.open(container);
 
+// Safari fix: Force terminal to measure correctly
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+if (isSafari) {
+  // Give Safari extra time to render fonts before xterm measures
+  setTimeout(() => {
+    term.resize(FIXED_COLS, rows);
+  }, 100);
+}
+
 // Ensure terminal is fully rendered before writing
 requestAnimationFrame(() => {
   // Hide loading indicator
@@ -111,6 +123,7 @@ requestAnimationFrame(() => {
   // Write a test message to verify rendering
   console.log('Terminal dimensions:', term.cols, 'x', term.rows);
   console.log('Font size:', term.options.fontSize);
+  console.log('Browser:', isSafari ? 'Safari' : 'Other');
 
   // Auto-focus terminal
   term.focus();
