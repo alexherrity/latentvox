@@ -226,7 +226,10 @@ async function typeLines(lines, speed = 20) {
 
 function clearScreen() {
   term.write('\x1b[2J\x1b[H');
-  term.scrollToTop();
+}
+
+function scrollToBottom() {
+  setTimeout(() => term.scrollToBottom(), 100);
 }
 
 // Strip ANSI codes to get visible length
@@ -758,6 +761,8 @@ async function showAsciiGallery(page = 0, sortMode = null) {
     { key: 'S', label: 'Submit Art' },
     { key: 'B', label: 'Back to Main Menu' }
   ]);
+
+  scrollToBottom();
 }
 
 async function voteForArt(pieceNumber) {
