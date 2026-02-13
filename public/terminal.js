@@ -34,18 +34,19 @@ const FIXED_COLS = 80;
 
 // Calculate responsive font size to fit 80 columns
 function calculateFontSize() {
-  const baseCharWidth = 9.6; // Courier New actual character width at 16px font
+  // Use 0.6em as the standard monospace character width ratio
   const baseFontSize = 16;
-  const padding = 10; // Account for terminal padding
+  const charWidthRatio = 0.6; // Standard monospace ratio
+  const padding = 40; // Account for terminal padding and margins
 
-  // Calculate required width for 80 columns at base font
+  const baseCharWidth = baseFontSize * charWidthRatio;
   const requiredWidth = (FIXED_COLS * baseCharWidth) + padding;
 
   // If window is narrower, scale font down proportionally
   if (window.innerWidth < requiredWidth) {
     const availableWidth = window.innerWidth - padding;
     const scale = availableWidth / (FIXED_COLS * baseCharWidth);
-    return Math.max(8, baseFontSize * scale); // Min 8px
+    return Math.max(10, baseFontSize * scale); // Min 10px for readability
   }
 
   return baseFontSize;
@@ -66,7 +67,11 @@ const { cols, rows, fontSize } = calculateTerminalSize();
 const term = new Terminal({
   cursorBlink: true,
   fontSize: fontSize,
-  fontFamily: '"Courier New", monospace',
+  fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+  fontWeight: 'normal',
+  fontWeightBold: 'bold',
+  letterSpacing: 0,
+  lineHeight: 1.0,
   theme: {
     background: '#000000',
     foreground: '#00ff00',
