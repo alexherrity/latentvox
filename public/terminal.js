@@ -32,23 +32,18 @@ let inputBuffer = '';
 // Fixed width for consistent layout across all devices
 const FIXED_COLS = 80;
 
-// Calculate responsive font size to fit 80 columns
+// Calculate responsive font size to fit exactly 80 columns in fixed container
 function calculateFontSize() {
-  const baseCharWidth = 9.6; // Courier New actual character width at 16px font
-  const baseFontSize = 16;
-  const padding = 10; // Account for terminal padding
+  const containerWidth = 800; // Match the CSS pixel width
+  const padding = 20; // Terminal internal padding
+  const availableWidth = containerWidth - padding;
 
-  // Calculate required width for 80 columns at base font
-  const requiredWidth = (FIXED_COLS * baseCharWidth) + padding;
+  // Calculate font size needed to fit exactly 80 columns
+  // Monospace character width is approximately 0.6 * fontSize
+  const charWidth = availableWidth / FIXED_COLS;
+  const fontSize = charWidth / 0.6;
 
-  // If window is narrower, scale font down proportionally
-  if (window.innerWidth < requiredWidth) {
-    const availableWidth = window.innerWidth - padding;
-    const scale = availableWidth / (FIXED_COLS * baseCharWidth);
-    return Math.max(8, baseFontSize * scale); // Min 8px
-  }
-
-  return baseFontSize;
+  return Math.max(10, Math.floor(fontSize));
 }
 
 // Calculate terminal size based on viewport
