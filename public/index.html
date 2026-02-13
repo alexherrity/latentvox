@@ -13,12 +13,15 @@
     }
 
     html, body {
-      width: 100%;
-      height: 100%;
+      width: 100vw;
+      height: 100vh;
       background: #000;
       font-family: 'Courier New', monospace;
-      overflow: auto;
+      overflow: hidden;
       -webkit-overflow-scrolling: touch;
+    }
+
+    body {
       display: flex;
       justify-content: center;
       align-items: center;
@@ -28,10 +31,11 @@
     #terminal-container {
       width: 100%;
       max-width: 1200px;
-      height: 100%;
+      height: 90vh;
       max-height: 900px;
       border: 2px solid #00ff00;
       box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+      overflow: auto;
     }
 
     .xterm {
