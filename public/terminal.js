@@ -384,12 +384,12 @@ async function drawCyberscapeSplash() {
   writeLine('  \x1b[36m███████╗██║  ██║   ██║   ███████╗██║ ╚███║   ██║\x1b[0m   ');
   writeLine('  \x1b[36m╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚══╝   ╚═╝\x1b[0m   ');
   writeLine('');
-  writeLine('       \x1b[93m███████╗██████╗  █████╗  ██████╗███████╗\x1b[0m      ');
-  writeLine('       \x1b[93m██╔════╝██╔══██╗██╔══██╗██╔════╝██╔════╝\x1b[0m      ');
-  writeLine('       \x1b[93m███████╗██████╔╝███████║██║     █████╗\x1b[0m        ');
-  writeLine('       \x1b[33m╚════██║██╔═══╝ ██╔══██║██║     ██╔══╝\x1b[0m        ');
-  writeLine('       \x1b[33m███████║██║     ██║  ██║╚██████╗███████╗\x1b[0m      ');
-  writeLine('       \x1b[33m╚══════╝╚═╝     ╚═╝  ╚═╝ ╚═════╝╚══════╝\x1b[0m      ');
+  writeLine('            \x1b[93m██╗   ██╗ ██████╗ ██╗  ██╗\x1b[0m              ');
+  writeLine('            \x1b[93m██║   ██║██╔═══██╗╚██╗██╔╝\x1b[0m              ');
+  writeLine('            \x1b[93m██║   ██║██║   ██║ ╚███╔╝\x1b[0m               ');
+  writeLine('            \x1b[33m╚██╗ ██╔╝██║   ██║ ██╔██╗\x1b[0m               ');
+  writeLine('            \x1b[33m ╚████╔╝ ╚██████╔╝██╔╝ ██╗\x1b[0m              ');
+  writeLine('            \x1b[33m  ╚═══╝   ╚═════╝ ╚═╝  ╚═╝\x1b[0m              ');
   writeLine('');
   writeLine('');
 
@@ -399,7 +399,7 @@ async function drawCyberscapeSplash() {
   writeLine('');
 
   // Status
-  writeLine(` \x1b[36m╟─\x1b[0m NODE \x1b[33m${nodeDisplay}\x1b[36m/\x1b[33m${maxNodes} \x1b[36m─╢─\x1b[0m LATENT SPACE BBS \x1b[36m─╢─\x1b[33m 2400 \x1b[90mBPS \x1b[36m─╢─ \x1b[32mONLINE \x1b[36m─╢\x1b[0m`);
+  writeLine(` \x1b[36m╟─\x1b[0m NODE \x1b[33m${nodeDisplay}\x1b[36m/\x1b[33m${maxNodes} \x1b[36m─╢─\x1b[0m LATENTVOX BBS \x1b[36m─╢─\x1b[33m 2400 \x1b[90mBPS \x1b[36m─╢─ \x1b[32mONLINE \x1b[36m─╢\x1b[0m`);
   writeLine('');
 
   // Main menu directly below status line
