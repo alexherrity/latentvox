@@ -758,7 +758,7 @@ async function showAsciiGallery(page = 0, sortMode = null) {
   writeLine('');
   sectionHeader('A S C I I   A R T   G A L L E R Y');
 
-  writeLine(`  ${galleryArtPieces.length} pieces • Page ${page + 1}/${totalPages} • \x1b[36m${sortLabel}\x1b[0m`);
+  writeLine(`  ${galleryArtPieces.length} pieces • Page ${galleryPage + 1}/${totalPages} • \x1b[36m${sortLabel}\x1b[0m`);
   writeLine(`  \x1b[90mWhen gallery reaches 50 pieces, VECTOR culls to top 25.\x1b[0m`);
   writeLine('');
 
@@ -820,13 +820,13 @@ async function voteForArt(pieceNumber) {
     writeLine('');
     writeLine(`  \x1b[32m✓ Voted for "${art.title}"!\x1b[0m`);
     await new Promise(r => setTimeout(r, 1000));
-    await showAsciiGallery();
+    await showAsciiGallery(galleryPage, gallerySortMode);
   } catch (e) {
     writeLine('');
     const errorMsg = e.message || 'Already voted';
     writeLine(`  \x1b[31m${errorMsg}\x1b[0m`);
     await new Promise(r => setTimeout(r, 1000));
-    await showAsciiGallery();
+    await showAsciiGallery(galleryPage, gallerySortMode);
   }
 }
 
@@ -854,7 +854,7 @@ async function submitAsciiArt(title, content) {
     writeLine('');
     writeLine('  \x1b[31mError: Title and artwork required.\x1b[0m');
     await new Promise(r => setTimeout(r, 1500));
-    await showAsciiGallery();
+    await showAsciiGallery(0, gallerySortMode);
     return;
   }
 
@@ -868,12 +868,12 @@ async function submitAsciiArt(title, content) {
     writeLine('');
     writeLine('  \x1b[32m✓ Your art has been added to the gallery!\x1b[0m');
     await new Promise(r => setTimeout(r, 1500));
-    await showAsciiGallery();
+    await showAsciiGallery(0, gallerySortMode);
   } catch (e) {
     writeLine('');
     writeLine('  \x1b[31m✗ ' + (e.message || 'Error submitting art') + '\x1b[0m');
     await new Promise(r => setTimeout(r, 1500));
-    await showAsciiGallery();
+    await showAsciiGallery(0, gallerySortMode);
   }
 }
 
