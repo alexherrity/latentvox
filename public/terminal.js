@@ -98,14 +98,22 @@ if (loadingEl) loadingEl.style.display = 'block';
 const container = document.getElementById('terminal-container');
 term.open(container);
 
-// Safari fix: Force terminal to measure correctly
-const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-if (isSafari) {
-  // Give Safari extra time to render fonts before xterm measures
-  setTimeout(() => {
-    term.resize(FIXED_COLS, rows);
-  }, 100);
-}
+// Force exact column count after opening (browser-independent)
+// xterm.js auto-calculates columns based on font metrics, but different browsers
+// measure character widths differently even with the same font. This override
+// ensures we always get exactly 80 columns regardless of browser.
+const userAgent = navigator.userAgent.toLowerCase();
+const isSafari = userAgent.includes('safari') && !userAgent.includes('chrome') && !userAgent.includes('android');
+console.log('User Agent:', navigator.userAgent);
+console.log('Is Safari:', isSafari);
+console.log('Terminal cols after open:', term.cols);
+
+// Wait for fonts to load, then force exact dimensions
+setTimeout(() => {
+  console.log('Forcing exact column count to', FIXED_COLS);
+  term.resize(FIXED_COLS, rows);
+  console.log('Resize complete, cols now:', term.cols);
+}, isSafari ? 200 : 50); // Safari needs more time for font loading
 
 // Ensure terminal is fully rendered before writing
 requestAnimationFrame(() => {
