@@ -61,7 +61,7 @@ const { cols, rows, fontSize } = calculateTerminalSize();
 const term = new Terminal({
   cursorBlink: true,
   fontSize: fontSize,
-  fontFamily: '"Courier New", monospace',
+  fontFamily: 'Inconsolata, "Courier New", monospace',
   allowTransparency: false,
   convertEol: false,
   rendererType: 'canvas', // Force canvas renderer for consistency
