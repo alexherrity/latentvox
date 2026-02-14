@@ -65,6 +65,7 @@ const term = new Terminal({
   allowTransparency: false,
   convertEol: false,
   rendererType: 'canvas', // Force canvas renderer for consistency
+  windowsMode: false, // Ensure consistent line endings
   theme: {
     background: '#000000',
     foreground: '#00ff00',
@@ -112,11 +113,25 @@ console.log('Forcing immediate resize to', FIXED_COLS);
 term.resize(FIXED_COLS, rows);
 console.log('Immediate resize complete, cols now:', term.cols);
 
+// Force a reflow to ensure Safari applies the resize visually
+const forceReflow = container.offsetHeight;
+console.log('Forced reflow, container height:', forceReflow);
+
+// Programmatically trigger a window resize event (this is what fixes it manually!)
+// Safari needs this to actually apply the terminal resize visually
+setTimeout(() => {
+  console.log('Dispatching resize event to force Safari to repaint');
+  window.dispatchEvent(new Event('resize'));
+}, 0);
+
 // Also wait for fonts to load and resize again to be extra safe
 document.fonts.ready.then(() => {
   console.log('Fonts loaded, forcing resize again to', FIXED_COLS);
   term.resize(FIXED_COLS, rows);
-  console.log('Post-font-load resize complete, cols now:', term.cols);
+  const reflow2 = container.offsetHeight;
+  console.log('Post-font-load resize complete, cols now:', term.cols, 'container height:', reflow2);
+  // Trigger resize event again after fonts load
+  window.dispatchEvent(new Event('resize'));
 });
 
 // Ensure terminal is fully rendered before writing
