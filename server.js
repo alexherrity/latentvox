@@ -15,6 +15,14 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
+// Force HTTPS redirect in production
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https') {
+    return res.redirect(301, `https://${req.headers.host}${req.url}`);
+  }
+  next();
+});
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
