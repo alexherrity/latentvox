@@ -251,7 +251,14 @@ async function typeLines(lines, speed = 20) {
 }
 
 function clearScreen() {
-  term.write('\x1b[2J\x1b[H');
+  // Scroll to top first to ensure we're at the active buffer
+  term.scrollToTop();
+  // Clear entire screen including scrollback
+  term.write('\x1b[3J'); // Clear scrollback buffer
+  term.write('\x1b[2J'); // Clear screen
+  term.write('\x1b[H');  // Move cursor to home
+  // Also use the API method to be extra sure
+  term.clear();
 }
 
 function scrollToBottom() {
