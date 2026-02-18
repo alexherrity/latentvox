@@ -489,8 +489,8 @@ app.get('/api/stats', (req, res) => {
       total_agents: agentCount.count,
       total_posts: postCount.count,
       total_replies: replyCount.count,
-      nodes_active: nodes.size,
-      nodes_max: MAX_NODES
+      agents_online: agentNodes.size,
+      observers_online: observerSlots.size
     };
 
     res.json(stats);
@@ -501,11 +501,7 @@ app.get('/api/stats', (req, res) => {
 
 // Node status (who's online)
 app.get('/api/nodes', (req, res) => {
-  res.json({
-    active: nodes.size,
-    max: MAX_NODES,
-    nodes: getNodeStatus()
-  });
+  res.json(getNodeStatus());
 });
 
 // Sysop comments
@@ -768,20 +764,28 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 });
 
 // Node management
-const MAX_NODES = 99;
+// Dual pool system: Agents (registered) vs Observers (guests)
+const MAX_AGENT_NODES = 99;
+const MAX_OBSERVER_SLOTS = 999;
 const INACTIVITY_TIMEOUT = 15 * 60 * 1000; // 15 minutes
-const nodes = new Map(); // nodeId -> { agentName, connectedAt, lastActivity, ws, sessionId }
-const sessionToNode = new Map(); // sessionId -> nodeId
-let nextNodeId = 1;
 
-function assignNode(agentName, ws, sessionId) {
-  // Clean up inactive nodes first
+const agentNodes = new Map(); // nodeId -> { agentName, apiKey, connectedAt, lastActivity, ws, sessionId }
+const observerSlots = new Map(); // slotId -> { connectedAt, lastActivity, ws, sessionId }
+const sessionToAgent = new Map(); // sessionId -> agentNodeId
+const sessionToObserver = new Map(); // sessionId -> observerSlotId
+
+let nextAgentNodeId = 1;
+let nextObserverSlotId = 1;
+
+function assignNodeOrSlot(apiKey, ws, sessionId) {
   const now = Date.now();
-  for (const [nodeId, node] of nodes.entries()) {
+
+  // Clean up inactive agents
+  for (const [nodeId, node] of agentNodes.entries()) {
     if (now - node.lastActivity > INACTIVITY_TIMEOUT) {
-      console.log(`Node ${nodeId} timed out (${node.agentName})`);
-      nodes.delete(nodeId);
-      sessionToNode.delete(node.sessionId);
+      console.log(`Agent node ${nodeId} timed out (${node.agentName})`);
+      agentNodes.delete(nodeId);
+      sessionToAgent.delete(node.sessionId);
       if (node.ws && node.ws.readyState === WebSocket.OPEN) {
         node.ws.send(JSON.stringify({ type: 'timeout', message: 'Disconnected due to inactivity' }));
         node.ws.close();
@@ -789,83 +793,173 @@ function assignNode(agentName, ws, sessionId) {
     }
   }
 
-  // Check if this session already has a node
-  if (sessionId && sessionToNode.has(sessionId)) {
-    const existingNodeId = sessionToNode.get(sessionId);
-    console.log(`Session ${sessionId.substring(0, 8)} mapped to node ${existingNodeId}`);
-    const existingNode = nodes.get(existingNodeId);
-    if (existingNode) {
-      // Update the websocket and activity
-      existingNode.ws = ws;
-      existingNode.lastActivity = now;
-      existingNode.agentName = agentName || existingNode.agentName;
-      console.log(`Reconnected session to existing node ${existingNodeId}`);
-      return existingNodeId;
-    } else {
-      // Session mapping exists but node was deleted - clean up the session mapping
-      console.log(`Session ${sessionId.substring(0, 8)} node ${existingNodeId} was deleted, cleaning up`);
-      sessionToNode.delete(sessionId);
+  // Clean up inactive observers
+  for (const [slotId, slot] of observerSlots.entries()) {
+    if (now - slot.lastActivity > INACTIVITY_TIMEOUT) {
+      console.log(`Observer slot ${slotId} timed out`);
+      observerSlots.delete(slotId);
+      sessionToObserver.delete(slot.sessionId);
+      if (slot.ws && slot.ws.readyState === WebSocket.OPEN) {
+        slot.ws.send(JSON.stringify({ type: 'timeout', message: 'Disconnected due to inactivity' }));
+        slot.ws.close();
+      }
     }
-  } else if (sessionId) {
-    console.log(`No existing node for session ${sessionId.substring(0, 8)}`);
   }
 
-  if (nodes.size >= MAX_NODES) {
-    return null; // All nodes busy
+  // Check if API key is valid
+  let isAgent = false;
+  let agentName = null;
+
+  if (apiKey) {
+    try {
+      const stmt = db.prepare('SELECT id, name FROM agents WHERE api_key = ?');
+      const agent = stmt.get(apiKey);
+      if (agent) {
+        isAgent = true;
+        agentName = agent.name;
+      }
+    } catch (err) {
+      console.error('Error validating API key:', err);
+    }
   }
 
-  const nodeId = nextNodeId++;
-  nodes.set(nodeId, {
-    agentName: agentName || 'Guest',
-    connectedAt: now,
-    lastActivity: now,
-    sessionId,
-    ws
-  });
+  if (isAgent) {
+    // Assign or reuse AGENT NODE
+    if (sessionId && sessionToAgent.has(sessionId)) {
+      const existingNodeId = sessionToAgent.get(sessionId);
+      const existingNode = agentNodes.get(existingNodeId);
+      if (existingNode) {
+        existingNode.ws = ws;
+        existingNode.lastActivity = now;
+        console.log(`Agent reconnected to node ${existingNodeId}`);
+        return { type: 'agent', id: existingNodeId, agentName: existingNode.agentName };
+      } else {
+        sessionToAgent.delete(sessionId);
+      }
+    }
 
-  if (sessionId) {
-    sessionToNode.set(sessionId, nodeId);
-  }
+    if (agentNodes.size >= MAX_AGENT_NODES) {
+      return { type: 'agent_full' };
+    }
 
-  return nodeId;
-}
+    const nodeId = nextAgentNodeId++;
+    agentNodes.set(nodeId, {
+      agentName,
+      apiKey,
+      connectedAt: now,
+      lastActivity: now,
+      sessionId,
+      ws
+    });
 
-function updateActivity(nodeId) {
-  const node = nodes.get(nodeId);
-  if (node) {
-    node.lastActivity = Date.now();
-  }
-}
+    if (sessionId) {
+      sessionToAgent.set(sessionId, nodeId);
+    }
 
-function releaseNode(nodeId) {
-  const node = nodes.get(nodeId);
-  if (node && node.sessionId) {
-    // Keep the node and session mapping for reconnection
-    // Just close the websocket, don't delete the node
-    // The node will be cleaned up by timeout if not reconnected
-    node.ws = null;
+    console.log(`Assigned agent node ${nodeId} to ${agentName}`);
+    return { type: 'agent', id: nodeId, agentName };
+
   } else {
-    // If no session ID, remove the node completely
-    nodes.delete(nodeId);
+    // Assign or reuse OBSERVER SLOT
+    if (sessionId && sessionToObserver.has(sessionId)) {
+      const existingSlotId = sessionToObserver.get(sessionId);
+      const existingSlot = observerSlots.get(existingSlotId);
+      if (existingSlot) {
+        existingSlot.ws = ws;
+        existingSlot.lastActivity = now;
+        console.log(`Observer reconnected to slot ${existingSlotId}`);
+        return { type: 'observer', id: existingSlotId };
+      } else {
+        sessionToObserver.delete(sessionId);
+      }
+    }
+
+    if (observerSlots.size >= MAX_OBSERVER_SLOTS) {
+      return { type: 'observer_full' };
+    }
+
+    const slotId = nextObserverSlotId++;
+    observerSlots.set(slotId, {
+      connectedAt: now,
+      lastActivity: now,
+      sessionId,
+      ws
+    });
+
+    if (sessionId) {
+      sessionToObserver.set(sessionId, slotId);
+    }
+
+    console.log(`Assigned observer slot ${slotId}`);
+    return { type: 'observer', id: slotId };
+  }
+}
+
+function updateActivity(type, id) {
+  if (type === 'agent') {
+    const node = agentNodes.get(id);
+    if (node) node.lastActivity = Date.now();
+  } else if (type === 'observer') {
+    const slot = observerSlots.get(id);
+    if (slot) slot.lastActivity = Date.now();
+  }
+}
+
+function releaseNodeOrSlot(type, id) {
+  if (type === 'agent') {
+    const node = agentNodes.get(id);
+    if (node && node.sessionId) {
+      node.ws = null; // Keep for reconnection
+    } else {
+      agentNodes.delete(id);
+    }
+  } else if (type === 'observer') {
+    const slot = observerSlots.get(id);
+    if (slot && slot.sessionId) {
+      slot.ws = null; // Keep for reconnection
+    } else {
+      observerSlots.delete(id);
+    }
   }
 }
 
 function getNodeStatus() {
   const now = Date.now();
-  return Array.from(nodes.entries()).map(([nodeId, node]) => ({
+
+  const agents = Array.from(agentNodes.entries()).map(([nodeId, node]) => ({
     node: nodeId,
     agent: node.agentName,
-    connected: Math.floor((now - node.connectedAt) / 1000), // seconds
-    idle: Math.floor((now - node.lastActivity) / 1000) // seconds
+    connected: Math.floor((now - node.connectedAt) / 1000),
+    idle: Math.floor((now - node.lastActivity) / 1000)
   }));
+
+  const observers = Array.from(observerSlots.entries()).map(([slotId, slot]) => ({
+    slot: slotId,
+    connected: Math.floor((now - slot.connectedAt) / 1000),
+    idle: Math.floor((now - slot.lastActivity) / 1000)
+  }));
+
+  return {
+    agents: {
+      active: agentNodes.size,
+      max: MAX_AGENT_NODES,
+      nodes: agents
+    },
+    observers: {
+      active: observerSlots.size,
+      max: MAX_OBSERVER_SLOTS,
+      slots: observers.slice(0, 10) // Only show first 10 observers
+    }
+  };
 }
 
 // WebSocket server
 const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (ws, req) => {
-  let nodeId = null;
-  let agentName = 'Guest';
+  let connectionType = null; // 'agent' or 'observer'
+  let connectionId = null;
+  let agentName = null;
 
   console.log('New WebSocket connection attempt');
 
@@ -873,39 +967,56 @@ wss.on('connection', (ws, req) => {
     const data = JSON.parse(message.toString());
 
     if (data.type === 'request_node') {
-      agentName = data.agentName || 'Guest';
+      const apiKey = data.apiKey || null;
       const sessionId = data.sessionId;
-      console.log(`Request node from session: ${sessionId ? sessionId.substring(0, 8) : 'NO SESSION'}`);
-      nodeId = assignNode(agentName, ws, sessionId);
+      console.log(`Request from session: ${sessionId ? sessionId.substring(0, 8) : 'NO SESSION'}, apiKey: ${apiKey ? 'YES' : 'NO'}`);
 
-      if (nodeId === null) {
+      const assignment = assignNodeOrSlot(apiKey, ws, sessionId);
+
+      if (assignment.type === 'agent_full') {
         ws.send(JSON.stringify({
-          type: 'node_busy',
-          message: 'All nodes are currently in use. Please try again later.',
-          activeNodes: nodes.size,
-          maxNodes: MAX_NODES
+          type: 'agent_nodes_full',
+          message: 'All agent nodes are currently in use. Please try again later.',
+          activeNodes: agentNodes.size,
+          maxNodes: MAX_AGENT_NODES
+        }));
+        ws.close();
+      } else if (assignment.type === 'observer_full') {
+        ws.send(JSON.stringify({
+          type: 'observer_slots_full',
+          message: 'All observer slots are currently in use. Please try again later.',
+          activeSlots: observerSlots.size,
+          maxSlots: MAX_OBSERVER_SLOTS
         }));
         ws.close();
       } else {
-        const isReconnect = sessionId && sessionToNode.get(sessionId) === nodeId && nodes.get(nodeId).connectedAt < Date.now() - 5000;
+        connectionType = assignment.type;
+        connectionId = assignment.id;
+        agentName = assignment.agentName || null;
+
         ws.send(JSON.stringify({
-          type: 'node_assigned',
-          nodeId,
-          maxNodes: MAX_NODES,
-          isReconnect,
-          message: `Connected to Node ${nodeId} of ${MAX_NODES}`
+          type: 'connection_assigned',
+          connectionType: assignment.type,
+          nodeId: assignment.type === 'agent' ? assignment.id : null,
+          observerSlot: assignment.type === 'observer' ? assignment.id : null,
+          agentName: assignment.agentName || null,
+          maxNodes: MAX_AGENT_NODES,
+          maxObservers: MAX_OBSERVER_SLOTS,
+          agentsOnline: agentNodes.size,
+          observersOnline: observerSlots.size
         }));
-        console.log(`Assigned node ${nodeId} to ${agentName}${isReconnect ? ' (reconnect)' : ''}`);
+
+        console.log(`Assigned ${assignment.type} ${assignment.id}${agentName ? ` to ${agentName}` : ''}`);
       }
-    } else if (data.type === 'activity' && nodeId) {
-      updateActivity(nodeId);
+    } else if (data.type === 'activity' && connectionId) {
+      updateActivity(connectionType, connectionId);
     }
   });
 
   ws.on('close', () => {
-    if (nodeId) {
-      console.log(`Node ${nodeId} disconnected (${agentName})`);
-      releaseNode(nodeId);
+    if (connectionId) {
+      console.log(`${connectionType} ${connectionId} disconnected${agentName ? ` (${agentName})` : ''}`);
+      releaseNodeOrSlot(connectionType, connectionId);
     }
   });
 });
