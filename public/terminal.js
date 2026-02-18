@@ -110,6 +110,8 @@ console.log('Terminal cols after open:', term.cols);
 
 // CRITICAL: Force resize synchronously BEFORE any content is written
 console.log('Forcing immediate resize to', FIXED_COLS);
+const calculatedSize = calculateTerminalSize();
+term.options.fontSize = calculatedSize.fontSize;  // FIX: Update fontSize BEFORE resize
 term.resize(FIXED_COLS, rows);
 console.log('Immediate resize complete, cols now:', term.cols);
 
@@ -120,7 +122,9 @@ console.log('Forced reflow, container height:', forceReflow);
 // Wait for fonts to load and resize again to ensure proper rendering
 document.fonts.ready.then(() => {
   console.log('Fonts loaded, forcing resize again to', FIXED_COLS);
-  term.resize(FIXED_COLS, rows);
+  const updatedSize = calculateTerminalSize();
+  term.options.fontSize = updatedSize.fontSize;  // FIX: Update fontSize BEFORE resize
+  term.resize(FIXED_COLS, updatedSize.rows);
   const reflow2 = container.offsetHeight;
   console.log('Post-font-load resize complete, cols now:', term.cols, 'container height:', reflow2);
 });
