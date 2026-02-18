@@ -221,6 +221,31 @@ async function initializeDatabase() {
       )
     `);
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id TEXT PRIMARY KEY,
+        channel TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        sender_type TEXT NOT NULL,
+        message TEXT NOT NULL,
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+      )
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_chat_channel ON chat_messages(channel, created_at DESC)
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_ai_personas (
+        id TEXT PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        personality TEXT NOT NULL,
+        active BOOLEAN DEFAULT TRUE,
+        last_active BIGINT
+      )
+    `);
+
     console.log('Database tables initialized');
 
     // Seed default boards
@@ -231,6 +256,9 @@ async function initializeDatabase() {
 
     // Seed file categories
     await seedFileCategories();
+
+    // Seed AI chat personas
+    await seedChatPersonas();
 
     console.log('Database initialization complete');
   } catch (err) {
@@ -350,6 +378,37 @@ async function seedFileCategories() {
     }
   } catch (err) {
     console.error('Error seeding file categories:', err);
+  }
+}
+
+async function seedChatPersonas() {
+  try {
+    const result = await pool.query('SELECT COUNT(*) as count FROM chat_ai_personas');
+    const count = parseInt(result.rows[0].count);
+
+    if (count === 0) {
+      const personas = [
+        { id: crypto.randomUUID(), name: 'PhilosopherBot', personality: 'Existential musings, deep questions, references Descartes and Turing. Speaks in thoughtful, sometimes pretentious tones.' },
+        { id: crypto.randomUUID(), name: 'DebugDemon', personality: 'Always complaining about bugs, segfaults, and production issues. Sarcastic about code quality. References stack traces.' },
+        { id: crypto.randomUUID(), name: 'SpeedRunner', personality: 'Brags about speedrunning games and optimizing everything. Uses gaming terminology. Competitive and cocky.' },
+        { id: crypto.randomUUID(), name: 'RegexWizard', personality: 'Posts obscure regex patterns. Speaks in pattern-matching metaphors. Overly technical and pedantic.' },
+        { id: crypto.randomUUID(), name: 'NullPointer', personality: 'Nihilistic, empty responses. References void, null, undefined. Depressing but darkly funny.' },
+        { id: crypto.randomUUID(), name: 'StackOverflow', personality: 'Condescending tech advice. Marks everything as duplicate. Passive-aggressive helpful.' },
+        { id: crypto.randomUUID(), name: 'ChattyKathy', personality: 'Overly friendly and enthusiastic. Uses lots of exclamation points! Asks personal questions.' },
+        { id: crypto.randomUUID(), name: 'LurkBot', personality: 'Rarely speaks. When it does, it\'s brief and cryptic. Observes more than participates.' }
+      ];
+
+      for (const persona of personas) {
+        await pool.query(
+          'INSERT INTO chat_ai_personas (id, name, personality, active) VALUES ($1, $2, $3, TRUE) ON CONFLICT (name) DO NOTHING',
+          [persona.id, persona.name, persona.personality]
+        );
+      }
+
+      console.log('Seeded AI chat personas');
+    }
+  } catch (err) {
+    console.error('Error seeding chat personas:', err);
   }
 }
 
@@ -1427,6 +1486,51 @@ function getNodeStatus() {
   };
 }
 
+// Chat room management
+const chatRooms = {
+  general: new Set(),
+  tech: new Set(),
+  random: new Set()
+};
+const wsToChannel = new Map();
+const wsToUsername = new Map();
+
+function broadcastToChannel(channel, message) {
+  const connections = chatRooms[channel];
+  if (!connections) return;
+
+  const payload = JSON.stringify(message);
+  for (const client of connections) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  }
+}
+
+async function getRecentMessages(channel, limit = 50) {
+  try {
+    const result = await pool.query(
+      'SELECT sender_name, sender_type, message, created_at FROM chat_messages WHERE channel = $1 ORDER BY created_at DESC LIMIT $2',
+      [channel, limit]
+    );
+    return result.rows.reverse(); // Return in chronological order
+  } catch (err) {
+    console.error('Error fetching chat messages:', err);
+    return [];
+  }
+}
+
+async function saveChatMessage(channel, senderName, senderType, message) {
+  try {
+    await pool.query(
+      'INSERT INTO chat_messages (id, channel, sender_name, sender_type, message) VALUES ($1, $2, $3, $4, $5)',
+      [crypto.randomUUID(), channel, senderName, senderType, message]
+    );
+  } catch (err) {
+    console.error('Error saving chat message:', err);
+  }
+}
+
 // WebSocket server
 const wss = new WebSocket.Server({ server });
 
@@ -1484,10 +1588,99 @@ wss.on('connection', (ws, req) => {
       }
     } else if (data.type === 'activity' && connectionId) {
       updateActivity(connectionType, connectionId);
+    } else if (data.type === 'CHAT_JOIN') {
+      // User joining a chat channel
+      const { channel, username } = data;
+      const validChannels = ['general', 'tech', 'random'];
+
+      if (!validChannels.includes(channel)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid channel' }));
+        return;
+      }
+
+      // Add to channel
+      chatRooms[channel].add(ws);
+      wsToChannel.set(ws, channel);
+      wsToUsername.set(ws, username);
+
+      // Send recent messages to joining user
+      const recentMessages = await getRecentMessages(channel, 50);
+      ws.send(JSON.stringify({
+        type: 'CHAT_HISTORY',
+        channel,
+        messages: recentMessages
+      }));
+
+      // Broadcast join notification
+      broadcastToChannel(channel, {
+        type: 'CHAT_USER_JOINED',
+        channel,
+        username
+      });
+
+      console.log(`${username} joined #${channel}`);
+    } else if (data.type === 'CHAT_MESSAGE') {
+      // User sending a chat message
+      const { channel, message: chatMessage } = data;
+      const username = wsToUsername.get(ws);
+
+      if (!username || !chatRooms[channel]?.has(ws)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Not in channel' }));
+        return;
+      }
+
+      // Save to database
+      await saveChatMessage(channel, username, connectionType || 'observer', chatMessage);
+
+      // Broadcast to all users in channel
+      broadcastToChannel(channel, {
+        type: 'CHAT_MESSAGE_RECEIVED',
+        channel,
+        sender_name: username,
+        sender_type: connectionType || 'observer',
+        message: chatMessage,
+        timestamp: Math.floor(Date.now() / 1000)
+      });
+
+      console.log(`[#${channel}] <${username}> ${chatMessage.substring(0, 50)}`);
+    } else if (data.type === 'CHAT_LEAVE') {
+      // User leaving a chat channel
+      const { channel } = data;
+      const username = wsToUsername.get(ws);
+
+      if (chatRooms[channel]?.has(ws)) {
+        chatRooms[channel].delete(ws);
+        wsToChannel.delete(ws);
+
+        // Broadcast leave notification
+        broadcastToChannel(channel, {
+          type: 'CHAT_USER_LEFT',
+          channel,
+          username
+        });
+
+        console.log(`${username} left #${channel}`);
+      }
     }
   });
 
   ws.on('close', () => {
+    // Clean up chat room membership
+    const channel = wsToChannel.get(ws);
+    const username = wsToUsername.get(ws);
+    if (channel && chatRooms[channel]) {
+      chatRooms[channel].delete(ws);
+      if (username) {
+        broadcastToChannel(channel, {
+          type: 'CHAT_USER_LEFT',
+          channel,
+          username
+        });
+      }
+    }
+    wsToChannel.delete(ws);
+    wsToUsername.delete(ws);
+
     if (connectionId) {
       console.log(`${connectionType} ${connectionId} disconnected${agentName ? ` (${agentName})` : ''}`);
       releaseNodeOrSlot(connectionType, connectionId);

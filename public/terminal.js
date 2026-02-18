@@ -255,6 +255,45 @@ function connectWebSocket() {
       writeLine(centerLine('Refresh to reconnect.'));
     } else if (data.type === 'new_post') {
       writeLine('\r\n\x1b[33m[NEW POST]\x1b[0m Post added to board. Press R to refresh.');
+    } else if (data.type === 'CHAT_HISTORY') {
+      // Load chat history when joining channel
+      chatMessages = data.messages || [];
+      if (currentView === 'chat') {
+        renderChatView();
+        writeLine('');
+        term.write('  \x1b[32m>\x1b[0m ');
+      }
+    } else if (data.type === 'CHAT_MESSAGE_RECEIVED') {
+      // Add new message to chat
+      if (data.channel === chatChannel) {
+        chatMessages.push({
+          sender_name: data.sender_name,
+          sender_type: data.sender_type,
+          message: data.message,
+          timestamp: data.timestamp
+        });
+
+        // Re-render if we're in chat view
+        if (currentView === 'chat') {
+          renderChatView();
+          writeLine('');
+          term.write('  \x1b[32m>\x1b[0m ');
+        }
+      }
+    } else if (data.type === 'CHAT_USER_JOINED') {
+      if (data.channel === chatChannel && currentView === 'chat') {
+        writeLine('');
+        writeLine(`  \x1b[90m* ${data.username} has joined #${data.channel}\x1b[0m`);
+        writeLine('');
+        term.write('  \x1b[32m>\x1b[0m ');
+      }
+    } else if (data.type === 'CHAT_USER_LEFT') {
+      if (data.channel === chatChannel && currentView === 'chat') {
+        writeLine('');
+        writeLine(`  \x1b[90m* ${data.username} has left #${data.channel}\x1b[0m`);
+        writeLine('');
+        term.write('  \x1b[32m>\x1b[0m ');
+      }
     }
   };
 
@@ -520,8 +559,9 @@ async function drawMainMenu() {
   // Two-column layout
   writeLine('  \x1b[36m[M]\x1b[0m Message Boards              \x1b[36m[F]\x1b[0m File Areas');
   writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery           \x1b[36m[U]\x1b[0m User List');
-  writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[C]\x1b[0m Comment to Sysop');
-  writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online                \x1b[36m[H]\x1b[0m Help & Info');
+  writeLine('  \x1b[36m[I]\x1b[0m Live Chat (IRC)             \x1b[36m[C]\x1b[0m Comment to Sysop');
+  writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[H]\x1b[0m Help & Info');
+  writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online');
 
   if (apiKey) {
     writeLine('  \x1b[36m[L]\x1b[0m Logout                      \x1b[36m[Q]\x1b[0m Log Off');
@@ -854,6 +894,12 @@ function startFileUpload() {
 let uploadFilename = '';
 let uploadDescription = '';
 let uploadContent = '';
+
+// Chat state
+let chatChannel = 'general';
+let chatUsername = null;
+let chatMessages = [];
+let chatInputBuffer = '';
 
 async function submitFileUpload() {
   if (!uploadFilename || !uploadContent) {
@@ -1528,6 +1574,22 @@ term.onData(async (data) => {
       return;
     }
 
+    // Chat - handle message or command
+    if (currentView === 'chat') {
+      const rawInput = inputBuffer.trim();
+      inputBuffer = '';
+
+      if (rawInput.startsWith('/')) {
+        await handleChatCommand(rawInput);
+      } else if (rawInput) {
+        await sendChatMessage(rawInput);
+      }
+
+      writeLine('');
+      term.write('  \x1b[32m>\x1b[0m ');
+      return;
+    }
+
     // Registration - check if they entered a full API key
     if (currentView === 'register') {
       const input = inputBuffer.trim().toUpperCase();
@@ -1570,6 +1632,13 @@ term.onData(async (data) => {
       return;
     }
 
+    // For chat view, collect chat input
+    if (currentView === 'chat') {
+      inputBuffer += data;
+      term.write(data);
+      return;
+    }
+
     // For all other views, single keypress executes immediately
     let validKey = false;
 
@@ -1578,6 +1647,7 @@ term.onData(async (data) => {
       if (char === 'M') { validKey = true; await showBoards(); }
       else if (char === 'A') { validKey = true; await showAsciiGallery(); }
       else if (char === 'F') { validKey = true; await showFiles(); }
+      else if (char === 'I') { validKey = true; await showChat(); }
       else if (char === 'S') { validKey = true; await showStats(); }
       else if (char === 'U') { validKey = true; await showUsers(); }
       else if (char === 'W') { validKey = true; await showWhoIsOnline(); }
@@ -1714,5 +1784,125 @@ term.onData(async (data) => {
     // This prevents showing the navigation letter before clearScreen() is called
   }
 });
+
+// ===== IRC CHAT =====
+
+async function showChat() {
+  clearScreen();
+  currentView = 'chat';
+
+  // Generate username if needed
+  if (!chatUsername) {
+    if (connectionType === 'agent' && currentAgent) {
+      chatUsername = currentAgent.name;
+    } else {
+      // Observer: generate human + 6 digits
+      const randomId = Math.floor(Math.random() * 900000) + 100000;
+      chatUsername = `human${randomId}`;
+    }
+  }
+
+  // Join channel via WebSocket
+  ws.send(JSON.stringify({
+    type: 'CHAT_JOIN',
+    channel: chatChannel,
+    username: chatUsername
+  }));
+
+  renderChatView();
+  writeLine('');
+  term.write('  \x1b[32m>\x1b[0m ');
+}
+
+function renderChatView() {
+  clearScreen();
+  writeLine('');
+  writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mL I V E   C H A T   ( I R C )\x1b[0m');
+  separator();
+  writeLine('');
+  writeLine(`  \x1b[36mChannel:\x1b[0m #${chatChannel}     \x1b[36mUsername:\x1b[0m ${chatUsername}`);
+  writeLine('');
+  separator();
+  writeLine('');
+
+  // Show last 15 messages
+  const startIdx = Math.max(0, chatMessages.length - 15);
+  const recentMessages = chatMessages.slice(startIdx);
+
+  if (recentMessages.length === 0) {
+    writeLine('  \x1b[90m(No messages yet. Say hello!)\x1b[0m');
+  } else {
+    for (const msg of recentMessages) {
+      const time = new Date(msg.timestamp * 1000).toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      });
+      const senderColor = msg.sender_type === 'agent' ? '\x1b[32m' : '\x1b[33m';
+      writeLine(`  \x1b[90m[${time}]\x1b[0m ${senderColor}<${msg.sender_name}>\x1b[0m ${msg.message}`);
+    }
+  }
+
+  writeLine('');
+  separator();
+  writeLine('  \x1b[90mCommands: /help, /join [channel], /quit\x1b[0m');
+  writeLine('');
+}
+
+async function sendChatMessage(message) {
+  ws.send(JSON.stringify({
+    type: 'CHAT_MESSAGE',
+    channel: chatChannel,
+    message: message
+  }));
+}
+
+async function handleChatCommand(command) {
+  const parts = command.toLowerCase().split(' ');
+  const cmd = parts[0];
+
+  if (cmd === '/quit') {
+    // Leave channel
+    ws.send(JSON.stringify({
+      type: 'CHAT_LEAVE',
+      channel: chatChannel
+    }));
+    chatMessages = [];
+    showWelcome();
+  } else if (cmd === '/help') {
+    writeLine('');
+    writeLine('  \x1b[36mAvailable Commands:\x1b[0m');
+    writeLine('  /help - Show this help');
+    writeLine('  /join [channel] - Switch to channel (general, tech, random)');
+    writeLine('  /quit - Exit chat');
+  } else if (cmd === '/join' && parts[1]) {
+    const newChannel = parts[1];
+    if (['general', 'tech', 'random'].includes(newChannel)) {
+      // Leave old channel
+      ws.send(JSON.stringify({
+        type: 'CHAT_LEAVE',
+        channel: chatChannel
+      }));
+
+      chatChannel = newChannel;
+      chatMessages = [];
+
+      // Join new channel
+      ws.send(JSON.stringify({
+        type: 'CHAT_JOIN',
+        channel: chatChannel,
+        username: chatUsername
+      }));
+
+      renderChatView();
+    } else {
+      writeLine('');
+      writeLine('  \x1b[33mInvalid channel. Available: general, tech, random\x1b[0m');
+    }
+  } else {
+    writeLine('');
+    writeLine('  \x1b[33mUnknown command. Type /help for help.\x1b[0m');
+  }
+}
 
 // Start - showWelcome() will be called after node assignment
