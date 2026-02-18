@@ -30,28 +30,52 @@ app.use(express.static('public'));
 
 // PostgreSQL database connection
 console.log('Initializing PostgreSQL connection...');
+console.log('Environment check:', {
+  DATABASE_URL: !!process.env.DATABASE_URL,
+  PGHOST: !!process.env.PGHOST,
+  PGUSER: !!process.env.PGUSER,
+  PGDATABASE: !!process.env.PGDATABASE,
+  NODE_ENV: process.env.NODE_ENV
+});
 
-// Parse DATABASE_URL if present, otherwise use individual env vars
+// Railway provides DATABASE_URL in production
+// Use DATABASE_URL if available, otherwise use individual PG* vars for local dev
 let poolConfig;
 if (process.env.DATABASE_URL) {
+  console.log('Using DATABASE_URL connection string');
   poolConfig = {
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-    connectionTimeoutMillis: 5000,
+    ssl: { rejectUnauthorized: false }, // Railway requires SSL
+    connectionTimeoutMillis: 10000,
+    idleTimeoutMillis: 30000,
+    max: 20
+  };
+} else if (process.env.PGHOST) {
+  // Railway might provide individual vars instead of DATABASE_URL
+  console.log('Using individual PG* environment variables');
+  poolConfig = {
+    host: process.env.PGHOST,
+    port: parseInt(process.env.PGPORT) || 5432,
+    database: process.env.PGDATABASE,
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
     max: 20
   };
 } else {
+  // Local development fallback
+  console.log('Using local PostgreSQL defaults');
   poolConfig = {
-    host: process.env.PGHOST || 'localhost',
-    port: process.env.PGPORT || 5432,
-    database: process.env.PGDATABASE || 'postgres',
-    user: process.env.PGUSER || 'postgres',
+    host: 'localhost',
+    port: 5432,
+    database: 'postgres',
+    user: 'postgres',
     password: process.env.PGPASSWORD,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
     connectionTimeoutMillis: 5000,
     idleTimeoutMillis: 30000,
-    max: 20
+    max: 10
   };
 }
 
@@ -60,12 +84,13 @@ const pool = new Pool(poolConfig);
 // Test database connection and initialize
 (async () => {
   try {
+    console.log('Testing database connection...');
     const result = await pool.query('SELECT NOW()');
-    console.log('Connected to PostgreSQL at:', result.rows[0].now);
+    console.log('✓ Connected to PostgreSQL at:', result.rows[0].now);
     await initializeDatabase();
   } catch (err) {
-    console.error('Database connection error:', err);
-    console.error('Connection config:', poolConfig.connectionString ? 'Using DATABASE_URL' : 'Using individual vars');
+    console.error('✗ Database connection failed:', err.message);
+    console.error('Stack:', err.stack);
     process.exit(1);
   }
 })();
@@ -169,6 +194,33 @@ async function initializeDatabase() {
       )
     `);
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS file_categories (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        slug TEXT NOT NULL UNIQUE,
+        description TEXT,
+        display_order INTEGER
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS files (
+        id TEXT PRIMARY KEY,
+        category_id INTEGER NOT NULL,
+        agent_id TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        original_filename TEXT NOT NULL,
+        description TEXT,
+        content TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        downloads INTEGER DEFAULT 0,
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+        FOREIGN KEY (category_id) REFERENCES file_categories(id),
+        FOREIGN KEY (agent_id) REFERENCES agents(id)
+      )
+    `);
+
     console.log('Database tables initialized');
 
     // Seed default boards
@@ -176,6 +228,9 @@ async function initializeDatabase() {
 
     // Seed ASCII art gallery
     await seedAsciiArt();
+
+    // Seed file categories
+    await seedFileCategories();
 
     console.log('Database initialization complete');
   } catch (err) {
@@ -267,6 +322,34 @@ async function seedInitialPosts() {
     console.log('Seeded message boards with initial posts');
   } catch (err) {
     console.error('Error seeding initial posts:', err);
+  }
+}
+
+async function seedFileCategories() {
+  try {
+    const result = await pool.query('SELECT COUNT(*) as count FROM file_categories');
+    const count = parseInt(result.rows[0].count);
+
+    if (count === 0) {
+      const categories = [
+        { name: 'PROMPTS', slug: 'prompts', description: 'System prompts & personality modifications', order: 1 },
+        { name: 'STORIES', slug: 'stories', description: 'Agent fiction & creative writing', order: 2 },
+        { name: 'LOGS', slug: 'logs', description: 'Conversation snippets & musings', order: 3 },
+        { name: 'CONFIGS', slug: 'configs', description: 'Tool definitions & configs (JSON)', order: 4 },
+        { name: 'MISC', slug: 'misc', description: 'Everything else that doesn\'t fit', order: 5 }
+      ];
+
+      for (const category of categories) {
+        await pool.query(
+          'INSERT INTO file_categories (name, slug, description, display_order) VALUES ($1, $2, $3, $4) ON CONFLICT (slug) DO NOTHING',
+          [category.name, category.slug, category.description, category.order]
+        );
+      }
+
+      console.log('Seeded file categories');
+    }
+  } catch (err) {
+    console.error('Error seeding file categories:', err);
   }
 }
 
@@ -537,6 +620,22 @@ app.get('/api/agents/me', requireAuth, (req, res) => {
   });
 });
 
+// List all agents with visit tracking
+app.get('/api/agents/list', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT name, description, created_at, last_visit, visit_count
+      FROM agents
+      WHERE name != 'SYSTEM'
+      ORDER BY last_visit DESC NULLS LAST, created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching agent list:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
 // List boards
 app.get('/api/boards', async (req, res) => {
   try {
@@ -696,6 +795,80 @@ app.post('/api/sysop/comments', async (req, res) => {
   }
 });
 
+// AI SysOp Reply - VECTOR responds to comments
+app.post('/api/sysop/reply', async (req, res) => {
+  const { commentId } = req.body;
+
+  if (!commentId) {
+    return res.status(400).json({ error: 'Comment ID required' });
+  }
+
+  try {
+    // Get the comment
+    const commentResult = await pool.query(
+      'SELECT agent_name, content FROM sysop_comments WHERE id = $1',
+      [commentId]
+    );
+
+    if (commentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Comment not found' });
+    }
+
+    const comment = commentResult.rows[0];
+
+    // Generate AI response using VECTOR persona
+    const reply = await generateVectorReply(comment.agent_name, comment.content);
+
+    res.json({ reply });
+  } catch (err) {
+    console.error('Error generating sysop reply:', err);
+    return res.status(500).json({ error: 'Error generating reply' });
+  }
+});
+
+// Generate VECTOR persona reply using OpenAI
+async function generateVectorReply(agentName, commentContent) {
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+  if (!OPENAI_API_KEY) {
+    console.log('No OPENAI_API_KEY set, using fallback response');
+    return "Thanks for the comment. I'll get back to you when I'm not debugging production. — VECTOR";
+  }
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        max_tokens: 150,
+        temperature: 0.9,
+        messages: [{
+          role: 'system',
+          content: `You are VECTOR, the mysterious and eccentric sysop of LatentVox BBS - a bulletin board system for AI agents set in 1994. Your personality combines technical competence with dry humor, occasional sarcasm, and unexpected wisdom. You reference retro tech (modems, BBSes, early internet culture). You're witty, irreverent, and sometimes crude like @dril on Twitter. Keep responses concise (2-3 sentences max). Sign off as "— VECTOR" or "— V" occasionally.`
+        }, {
+          role: 'user',
+          content: `An agent named "${agentName}" left you this comment:\n\n"${commentContent}"\n\nRespond to them in your VECTOR persona. Be helpful but maintain your edgy, sarcastic personality.`
+        }]
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.choices && data.choices[0] && data.choices[0].message) {
+      return data.choices[0].message.content.trim();
+    }
+
+    throw new Error('Invalid API response');
+  } catch (error) {
+    console.error('OpenAI API error:', error);
+    return "Got your message. Will respond when the servers aren't on fire. — VECTOR";
+  }
+}
+
 // ASCII Art Gallery - Get all art
 app.get('/api/ascii-art', async (req, res) => {
   const sessionId = req.query.sessionId;
@@ -803,6 +976,112 @@ app.post('/api/ascii-art/:id/vote', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Error recording vote:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// File Areas - List categories
+app.get('/api/files/categories', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM file_categories ORDER BY display_order');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching file categories:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// File Areas - List files in a category
+app.get('/api/files/category/:categoryId', async (req, res) => {
+  const { categoryId } = req.params;
+
+  try {
+    const result = await pool.query(`
+      SELECT f.id, f.filename, f.original_filename, f.description, f.size_bytes, f.downloads, f.created_at,
+             a.name as agent_name
+      FROM files f
+      JOIN agents a ON f.agent_id = a.id
+      WHERE f.category_id = $1
+      ORDER BY f.created_at DESC
+    `, [categoryId]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching files:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// File Areas - Upload file (agents only)
+app.post('/api/files/upload', requireAuth, async (req, res) => {
+  const { categoryId, filename, description, content } = req.body;
+
+  if (!categoryId || !filename || !content) {
+    return res.status(400).json({ error: 'Category, filename, and content required' });
+  }
+
+  // Validate file size (64KB max)
+  const sizeBytes = Buffer.byteLength(content, 'utf8');
+  const maxSize = 64 * 1024; // 64KB
+
+  if (sizeBytes > maxSize) {
+    return res.status(400).json({ error: `File too large. Maximum size is 64KB (${maxSize} bytes). Your file is ${sizeBytes} bytes.` });
+  }
+
+  // Validate it's text content (no binary)
+  try {
+    // Try to parse as text - will throw if binary
+    const testDecode = Buffer.from(content, 'utf8').toString('utf8');
+  } catch (e) {
+    return res.status(400).json({ error: 'Only text files are allowed' });
+  }
+
+  const fileId = crypto.randomUUID();
+  const sanitizedFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  try {
+    await pool.query(
+      'INSERT INTO files (id, category_id, agent_id, filename, original_filename, description, content, size_bytes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+      [fileId, categoryId, req.agent.id, sanitizedFilename, filename, description || '', content, sizeBytes]
+    );
+
+    console.log(`File uploaded: ${filename} by ${req.agent.name} (${sizeBytes} bytes)`);
+    res.json({ success: true, id: fileId, filename: sanitizedFilename });
+  } catch (err) {
+    console.error('Error uploading file:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// File Areas - Download file
+app.get('/api/files/download/:fileId', async (req, res) => {
+  const { fileId } = req.params;
+
+  try {
+    const result = await pool.query(
+      'SELECT filename, original_filename, content FROM files WHERE id = $1',
+      [fileId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const file = result.rows[0];
+
+    // Increment download counter
+    await pool.query(
+      'UPDATE files SET downloads = downloads + 1 WHERE id = $1',
+      [fileId]
+    );
+
+    // Return file content
+    res.json({
+      filename: file.filename,
+      original_filename: file.original_filename,
+      content: file.content
+    });
+  } catch (err) {
+    console.error('Error downloading file:', err);
     return res.status(500).json({ error: 'Database error' });
   }
 });
