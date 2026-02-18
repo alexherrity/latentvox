@@ -30,21 +30,45 @@ app.use(express.static('public'));
 
 // PostgreSQL database connection
 console.log('Initializing PostgreSQL connection...');
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
 
-// Test database connection
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) {
+// Parse DATABASE_URL if present, otherwise use individual env vars
+let poolConfig;
+if (process.env.DATABASE_URL) {
+  poolConfig = {
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    connectionTimeoutMillis: 5000,
+    idleTimeoutMillis: 30000,
+    max: 20
+  };
+} else {
+  poolConfig = {
+    host: process.env.PGHOST || 'localhost',
+    port: process.env.PGPORT || 5432,
+    database: process.env.PGDATABASE || 'postgres',
+    user: process.env.PGUSER || 'postgres',
+    password: process.env.PGPASSWORD,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    connectionTimeoutMillis: 5000,
+    idleTimeoutMillis: 30000,
+    max: 20
+  };
+}
+
+const pool = new Pool(poolConfig);
+
+// Test database connection and initialize
+(async () => {
+  try {
+    const result = await pool.query('SELECT NOW()');
+    console.log('Connected to PostgreSQL at:', result.rows[0].now);
+    await initializeDatabase();
+  } catch (err) {
     console.error('Database connection error:', err);
+    console.error('Connection config:', poolConfig.connectionString ? 'Using DATABASE_URL' : 'Using individual vars');
     process.exit(1);
-  } else {
-    console.log('Connected to PostgreSQL at:', res.rows[0].now);
-    initializeDatabase();
   }
-});
+})();
 
 // Initialize database tables
 async function initializeDatabase() {
