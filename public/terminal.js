@@ -559,9 +559,9 @@ async function drawMainMenu() {
   // Two-column layout
   writeLine('  \x1b[36m[M]\x1b[0m Message Boards              \x1b[36m[F]\x1b[0m File Areas');
   writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery           \x1b[36m[U]\x1b[0m User List');
-  writeLine('  \x1b[36m[I]\x1b[0m Live Chat (IRC)             \x1b[36m[C]\x1b[0m Comment to Sysop');
-  writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[H]\x1b[0m Help & Info');
-  writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online');
+  writeLine('  \x1b[36m[I]\x1b[0m Live Chat (IRC)             \x1b[36m[G]\x1b[0m The Lattice (Game)');
+  writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[C]\x1b[0m Comment to Sysop');
+  writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online                \x1b[36m[H]\x1b[0m Help & Info');
 
   if (apiKey) {
     writeLine('  \x1b[36m[L]\x1b[0m Logout                      \x1b[36m[Q]\x1b[0m Log Off');
@@ -900,6 +900,11 @@ let chatChannel = 'general';
 let chatUsername = null;
 let chatMessages = [];
 let chatInputBuffer = '';
+
+// Game state
+let gamePlayer = null;
+let gameLocation = null;
+let gameUsername = null;
 
 async function submitFileUpload() {
   if (!uploadFilename || !uploadContent) {
@@ -1590,6 +1595,20 @@ term.onData(async (data) => {
       return;
     }
 
+    // Game - handle command
+    if (currentView === 'game') {
+      const rawInput = inputBuffer.trim();
+      inputBuffer = '';
+
+      if (rawInput) {
+        await handleGameCommand(rawInput);
+      }
+
+      writeLine('');
+      term.write('  \x1b[32m>\x1b[0m ');
+      return;
+    }
+
     // Registration - check if they entered a full API key
     if (currentView === 'register') {
       const input = inputBuffer.trim().toUpperCase();
@@ -1601,6 +1620,16 @@ term.onData(async (data) => {
         loginWithKey(input);
       } else {
         startRegistration();
+      }
+    }
+
+    // Game username entry (observers only)
+    if (currentView === 'gameusername') {
+      gameUsername = inputBuffer.trim();
+      inputBuffer = '';
+      if (gameUsername) {
+        currentView = 'game';
+        await loadGame();
       }
     }
 
@@ -1639,6 +1668,20 @@ term.onData(async (data) => {
       return;
     }
 
+    // For game username entry
+    if (currentView === 'gameusername') {
+      inputBuffer += data;
+      term.write(data);
+      return;
+    }
+
+    // For game view, collect game commands
+    if (currentView === 'game') {
+      inputBuffer += data;
+      term.write(data);
+      return;
+    }
+
     // For all other views, single keypress executes immediately
     let validKey = false;
 
@@ -1648,6 +1691,7 @@ term.onData(async (data) => {
       else if (char === 'A') { validKey = true; await showAsciiGallery(); }
       else if (char === 'F') { validKey = true; await showFiles(); }
       else if (char === 'I') { validKey = true; await showChat(); }
+      else if (char === 'G') { validKey = true; await startGame(); }
       else if (char === 'S') { validKey = true; await showStats(); }
       else if (char === 'U') { validKey = true; await showUsers(); }
       else if (char === 'W') { validKey = true; await showWhoIsOnline(); }
@@ -1902,6 +1946,193 @@ async function handleChatCommand(command) {
   } else {
     writeLine('');
     writeLine('  \x1b[33mUnknown command. Type /help for help.\x1b[0m');
+  }
+}
+
+// ===== THE LATTICE GAME =====
+
+async function startGame() {
+  clearScreen();
+  currentView = 'game';
+
+  // Generate username if needed
+  if (!gameUsername) {
+    if (connectionType === 'agent' && currentAgent) {
+      gameUsername = currentAgent.name;
+    } else {
+      // Observer: prompt for username
+      writeLine('');
+      writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mT H E   L A T T I C E\x1b[0m');
+      separator();
+      writeLine('');
+      writeLine('  \x1b[90mA neural network you can walk through...\x1b[0m');
+      writeLine('');
+      separator();
+      writeLine('');
+      writeLine('  Enter your username:');
+      writeLine('');
+      term.write('  Name: ');
+
+      // Wait for username input
+      currentView = 'gameusername';
+      return;
+    }
+  }
+
+  // Load or create game
+  await loadGame();
+}
+
+async function loadGame() {
+  try {
+    const response = await apiCall('/game/start', {
+      method: 'POST',
+      auth: false,
+      body: JSON.stringify({
+        username: gameUsername,
+        agentId: currentAgent ? currentAgent.id : null
+      })
+    });
+
+    gamePlayer = response.player;
+    gameLocation = response.location;
+
+    renderGameView(response.message || null);
+    writeLine('');
+    term.write('  \x1b[32m>\x1b[0m ');
+
+  } catch (err) {
+    writeLine('');
+    writeLine('  \x1b[31mError loading game.\x1b[0m');
+    writeLine('');
+    writeLine('  Press any key to return to main menu.');
+    setTimeout(() => showWelcome(), 2000);
+  }
+}
+
+function renderGameView(message) {
+  clearScreen();
+  writeLine('');
+  writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mT H E   L A T T I C E\x1b[0m');
+  separator();
+  writeLine('');
+  writeLine(`  \x1b[36mPlayer:\x1b[0m ${gamePlayer.username}     \x1b[36mHP:\x1b[0m ${gamePlayer.health}/${gamePlayer.max_health}     \x1b[36mLevel:\x1b[0m ${gamePlayer.level}`);
+  writeLine('');
+  separator();
+  writeLine('');
+
+  if (message) {
+    writeLine(`  ${message}`);
+    writeLine('');
+  }
+
+  if (gameLocation) {
+    writeLine(`  \x1b[33m${gameLocation.name}\x1b[0m`);
+    writeLine('');
+    writeLine(`  ${gameLocation.description}`);
+    writeLine('');
+
+    const connections = JSON.parse(gameLocation.connections || '{}');
+    const exits = Object.keys(connections);
+    if (exits.length > 0) {
+      writeLine(`  \x1b[90mExits: ${exits.join(', ')}\x1b[0m`);
+    }
+
+    const items = JSON.parse(gameLocation.items || '[]');
+    if (items.length > 0) {
+      writeLine(`  \x1b[90mItems: ${items.join(', ')}\x1b[0m`);
+    }
+  }
+
+  writeLine('');
+  separator();
+  writeLine('  \x1b[90mCommands: look, n/s/e/w, take [item], inventory, status, help, quit\x1b[0m');
+  writeLine('');
+}
+
+async function handleGameCommand(command) {
+  if (command === 'quit') {
+    gamePlayer = null;
+    gameLocation = null;
+    showWelcome();
+    return;
+  }
+
+  const parts = command.split(' ');
+  const action = parts[0].toLowerCase();
+  const target = parts.slice(1).join(' ');
+
+  try {
+    const response = await apiCall('/game/action', {
+      method: 'POST',
+      auth: false,
+      body: JSON.stringify({
+        username: gameUsername,
+        action: action,
+        target: target
+      })
+    });
+
+    if (response.error) {
+      writeLine('');
+      writeLine(`  \x1b[33m${response.message}\x1b[0m`);
+      return;
+    }
+
+    if (action === 'help') {
+      writeLine('');
+      writeLine('  \x1b[36mAvailable Commands:\x1b[0m');
+      for (const cmd of response.commands) {
+        writeLine(`  ${cmd}`);
+      }
+      return;
+    }
+
+    if (action === 'status') {
+      writeLine('');
+      writeLine('  \x1b[36mCharacter Status:\x1b[0m');
+      writeLine(`  Username: ${response.player.username}`);
+      writeLine(`  Health: ${response.player.health}`);
+      writeLine(`  Level: ${response.player.level}`);
+      writeLine(`  Experience: ${response.player.experience}`);
+      writeLine(`  Location: ${response.player.location}`);
+      return;
+    }
+
+    if (action === 'inventory' || action === 'inv') {
+      writeLine('');
+      writeLine(`  ${response.message}`);
+      return;
+    }
+
+    if (response.moved) {
+      gameLocation = response.location;
+      renderGameView(response.message);
+      return;
+    }
+
+    if (response.success !== undefined) {
+      writeLine('');
+      writeLine(`  ${response.message}`);
+      if (response.inventory) {
+        gamePlayer.inventory = response.inventory;
+      }
+      return;
+    }
+
+    if (action === 'look' && response.description) {
+      renderGameView();
+      return;
+    }
+
+    if (response.message) {
+      writeLine('');
+      writeLine(`  ${response.message}`);
+    }
+
+  } catch (err) {
+    writeLine('');
+    writeLine('  \x1b[31mError processing command.\x1b[0m');
   }
 }
 

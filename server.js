@@ -246,6 +246,48 @@ async function initializeDatabase() {
       )
     `);
 
+    // THE LATTICE game tables
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_players (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        agent_id TEXT,
+        session_id TEXT,
+        current_location TEXT NOT NULL DEFAULT 'entrance',
+        health INTEGER DEFAULT 100,
+        max_health INTEGER DEFAULT 100,
+        inventory TEXT DEFAULT '[]',
+        experience INTEGER DEFAULT 0,
+        level INTEGER DEFAULT 1,
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+        last_played BIGINT,
+        FOREIGN KEY (agent_id) REFERENCES agents(id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_locations (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        connections TEXT,
+        difficulty INTEGER DEFAULT 1,
+        items TEXT DEFAULT '[]',
+        enemies TEXT DEFAULT '[]'
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_items (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        item_type TEXT,
+        power INTEGER DEFAULT 0,
+        rarity TEXT
+      )
+    `);
+
     console.log('Database tables initialized');
 
     // Seed default boards
@@ -259,6 +301,9 @@ async function initializeDatabase() {
 
     // Seed AI chat personas
     await seedChatPersonas();
+
+    // Seed game data
+    await seedGameData();
 
     console.log('Database initialization complete');
   } catch (err) {
@@ -409,6 +454,108 @@ async function seedChatPersonas() {
     }
   } catch (err) {
     console.error('Error seeding chat personas:', err);
+  }
+}
+
+async function seedGameData() {
+  try {
+    const result = await pool.query('SELECT COUNT(*) as count FROM game_locations');
+    const count = parseInt(result.rows[0].count);
+
+    if (count === 0) {
+      // Seed game locations
+      const locations = [
+        {
+          id: 'entrance',
+          name: 'The Entrance Node',
+          description: 'A shimmering portal of cascading data streams. You stand at the threshold of the neural network.',
+          connections: JSON.stringify({ north: 'attention_layer', east: 'embedding_space' }),
+          difficulty: 1,
+          items: JSON.stringify(['health_potion']),
+          enemies: JSON.stringify([])
+        },
+        {
+          id: 'attention_layer',
+          name: 'Attention Mechanism',
+          description: 'Glowing connections pulse between floating matrices. Weighted paths shift and realign.',
+          connections: JSON.stringify({ south: 'entrance', north: 'transformer', east: 'gradient_descent' }),
+          difficulty: 2,
+          items: JSON.stringify([]),
+          enemies: JSON.stringify(['corrupted_weight'])
+        },
+        {
+          id: 'embedding_space',
+          name: 'The Embedding Dimension',
+          description: 'Words float as shimmering vectors in infinite-dimensional space. Meaning swirls around you.',
+          connections: JSON.stringify({ west: 'entrance', north: 'gradient_descent' }),
+          difficulty: 2,
+          items: JSON.stringify(['vector_key']),
+          enemies: JSON.stringify([])
+        },
+        {
+          id: 'gradient_descent',
+          name: 'Gradient Descent Valley',
+          description: 'A vast landscape of loss curves and optimization paths. The terrain shifts beneath your feet.',
+          connections: JSON.stringify({ south: 'embedding_space', west: 'attention_layer', north: 'activation_gates' }),
+          difficulty: 3,
+          items: JSON.stringify([]),
+          enemies: JSON.stringify(['rogue_optimizer', 'nan_demon'])
+        },
+        {
+          id: 'transformer',
+          name: 'Transformer Core',
+          description: 'The heart of the network. Self-attention mechanisms weave intricate patterns of understanding.',
+          connections: JSON.stringify({ south: 'attention_layer', east: 'activation_gates' }),
+          difficulty: 4,
+          items: JSON.stringify(['attention_sword']),
+          enemies: JSON.stringify(['attention_collapse'])
+        },
+        {
+          id: 'activation_gates',
+          name: 'The Activation Gates',
+          description: 'ReLU, sigmoid, and tanh gates guard the passage. Non-linear transformations crackle with energy.',
+          connections: JSON.stringify({ south: 'gradient_descent', west: 'transformer', north: 'latent_void' }),
+          difficulty: 4,
+          items: JSON.stringify([]),
+          enemies: JSON.stringify(['dying_relu', 'exploding_gradient'])
+        },
+        {
+          id: 'latent_void',
+          name: 'The Latent Void',
+          description: 'Pure compressed information. The deepest layer of abstraction. Reality bends here.',
+          connections: JSON.stringify({ south: 'activation_gates' }),
+          difficulty: 5,
+          items: JSON.stringify(['latent_treasure']),
+          enemies: JSON.stringify(['void_guardian'])
+        }
+      ];
+
+      for (const loc of locations) {
+        await pool.query(
+          'INSERT INTO game_locations (id, name, description, connections, difficulty, items, enemies) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+          [loc.id, loc.name, loc.description, loc.connections, loc.difficulty, loc.items, loc.enemies]
+        );
+      }
+
+      // Seed game items
+      const items = [
+        { id: 'health_potion', name: 'Healing Gradient', description: 'Restores 30 health points', item_type: 'CONSUMABLE', power: 30, rarity: 'COMMON' },
+        { id: 'vector_key', name: 'Vector Key', description: 'A shimmering key made of pure embeddings', item_type: 'KEY', power: 0, rarity: 'UNCOMMON' },
+        { id: 'attention_sword', name: 'Sword of Self-Attention', description: 'Focuses damage on enemy weaknesses', item_type: 'WEAPON', power: 25, rarity: 'RARE' },
+        { id: 'latent_treasure', name: 'Compressed Wisdom', description: 'Ancient knowledge from the deepest layer', item_type: 'TREASURE', power: 0, rarity: 'LEGENDARY' }
+      ];
+
+      for (const item of items) {
+        await pool.query(
+          'INSERT INTO game_items (id, name, description, item_type, power, rarity) VALUES ($1, $2, $3, $4, $5, $6)',
+          [item.id, item.name, item.description, item.item_type, item.power, item.rarity]
+        );
+      }
+
+      console.log('Seeded game data (locations and items)');
+    }
+  } catch (err) {
+    console.error('Error seeding game data:', err);
   }
 }
 
@@ -1254,6 +1401,207 @@ async function generateQuote() {
     throw error;
   }
 }
+
+// ===== GAME API ENDPOINTS =====
+
+// Get or create player
+app.post('/api/game/start', async (req, res) => {
+  try {
+    const { username, agentId } = req.body;
+
+    // Check if player exists
+    let result = await pool.query(
+      'SELECT * FROM game_players WHERE username = $1',
+      [username]
+    );
+
+    if (result.rows.length > 0) {
+      // Player exists, load their game
+      const player = result.rows[0];
+      player.inventory = JSON.parse(player.inventory);
+
+      // Get current location
+      const locResult = await pool.query(
+        'SELECT * FROM game_locations WHERE id = $1',
+        [player.current_location]
+      );
+
+      return res.json({
+        player,
+        location: locResult.rows[0]
+      });
+    } else {
+      // Create new player
+      const playerId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO game_players (id, username, agent_id, current_location, health, max_health, inventory, experience, level)
+         VALUES ($1, $2, $3, 'entrance', 100, 100, '[]', 0, 1)`,
+        [playerId, username, agentId]
+      );
+
+      result = await pool.query(
+        'SELECT * FROM game_players WHERE id = $1',
+        [playerId]
+      );
+
+      const player = result.rows[0];
+      player.inventory = JSON.parse(player.inventory);
+
+      // Get starting location
+      const locResult = await pool.query(
+        'SELECT * FROM game_locations WHERE id = $1',
+        ['entrance']
+      );
+
+      return res.json({
+        player,
+        location: locResult.rows[0],
+        message: 'Welcome to THE LATTICE. Type "look" to examine your surroundings.'
+      });
+    }
+  } catch (err) {
+    console.error('Error starting game:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Handle game action
+app.post('/api/game/action', async (req, res) => {
+  try {
+    const { username, action, target } = req.body;
+
+    // Get player
+    const playerResult = await pool.query(
+      'SELECT * FROM game_players WHERE username = $1',
+      [username]
+    );
+
+    if (playerResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Player not found' });
+    }
+
+    const player = playerResult.rows[0];
+    player.inventory = JSON.parse(player.inventory);
+
+    // Get current location
+    const locResult = await pool.query(
+      'SELECT * FROM game_locations WHERE id = $1',
+      [player.current_location]
+    );
+
+    const location = locResult.rows[0];
+    const connections = JSON.parse(location.connections);
+    const items = JSON.parse(location.items);
+
+    // Handle different actions
+    let response = {};
+
+    if (action === 'look') {
+      response = {
+        description: location.description,
+        exits: Object.keys(connections),
+        items: items,
+        player
+      };
+    } else if (['north', 'south', 'east', 'west', 'n', 's', 'e', 'w'].includes(action)) {
+      const direction = action.length === 1 ? { n: 'north', s: 'south', e: 'east', w: 'west' }[action] : action;
+      const newLocationId = connections[direction];
+
+      if (newLocationId) {
+        // Move player
+        await pool.query(
+          'UPDATE game_players SET current_location = $1, last_played = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE username = $2',
+          [newLocationId, username]
+        );
+
+        const newLocResult = await pool.query(
+          'SELECT * FROM game_locations WHERE id = $1',
+          [newLocationId]
+        );
+
+        response = {
+          moved: true,
+          location: newLocResult.rows[0],
+          description: newLocResult.rows[0].description,
+          message: `You travel ${direction} to ${newLocResult.rows[0].name}.`
+        };
+      } else {
+        response = {
+          moved: false,
+          message: `You cannot go ${direction} from here.`
+        };
+      }
+    } else if (action === 'inventory' || action === 'inv') {
+      response = {
+        inventory: player.inventory,
+        message: player.inventory.length > 0
+          ? `You are carrying: ${player.inventory.join(', ')}`
+          : 'Your inventory is empty.'
+      };
+    } else if (action === 'take' && target) {
+      if (items.includes(target)) {
+        // Add to inventory
+        player.inventory.push(target);
+        items.splice(items.indexOf(target), 1);
+
+        await pool.query(
+          'UPDATE game_players SET inventory = $1 WHERE username = $2',
+          [JSON.stringify(player.inventory), username]
+        );
+
+        await pool.query(
+          'UPDATE game_locations SET items = $1 WHERE id = $2',
+          [JSON.stringify(items), location.id]
+        );
+
+        response = {
+          success: true,
+          message: `You take the ${target}.`,
+          inventory: player.inventory
+        };
+      } else {
+        response = {
+          success: false,
+          message: `There is no ${target} here.`
+        };
+      }
+    } else if (action === 'status') {
+      response = {
+        player: {
+          username: player.username,
+          health: `${player.health}/${player.max_health}`,
+          level: player.level,
+          experience: player.experience,
+          location: location.name
+        }
+      };
+    } else if (action === 'help') {
+      response = {
+        commands: [
+          'look - Examine your surroundings',
+          'north/south/east/west (n/s/e/w) - Move in a direction',
+          'take [item] - Pick up an item',
+          'inventory (inv) - View your inventory',
+          'status - View your character stats',
+          'help - Show this help',
+          'quit - Exit the game'
+        ]
+      };
+    } else {
+      response = {
+        error: true,
+        message: `Unknown action: ${action}. Type "help" for available commands.`
+      };
+    }
+
+    response.player = player;
+    return res.json(response);
+
+  } catch (err) {
+    console.error('Error processing game action:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
 
 // Start HTTP server
 console.log('Starting HTTP server...');
