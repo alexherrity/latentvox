@@ -30,8 +30,9 @@ let currentView = 'main';
 let inputBuffer = '';
 let sessionQuote = null; // Cached quote for this page session (fresh on reload)
 
-// Fixed width for consistent layout across all devices
-const FIXED_COLS = 80;
+// Desktop targets 80 cols; mobile lets FitAddon pick natural cols at readable font
+const DESKTOP_COLS = 80;
+const MOBILE_FONT_SIZE = 13;
 
 // Initialize terminal
 const term = new Terminal({
@@ -76,22 +77,30 @@ if (loadingEl) loadingEl.style.display = 'block';
 const container = document.getElementById('terminal-container');
 term.open(container);
 
-// Fit terminal to container, adjusting font size to target 80 columns
+// Detect mobile viewport
+function isMobileViewport() {
+  return window.innerWidth <= 768;
+}
+
+// Fit terminal to container
 function fitTerminal() {
   if (!fitAddon) return;
 
-  // First fit to get current dimensions at current font size
-  fitAddon.fit();
-
-  // If cols don't match target, adjust font size iteratively
-  if (term.cols !== FIXED_COLS) {
-    const currentFontSize = term.options.fontSize || 16;
-    // Scale font proportionally: if we got 100 cols and want 80, increase font
-    const scaleFactor = term.cols / FIXED_COLS;
-    const newFontSize = Math.max(8, Math.min(24, Math.floor(currentFontSize * scaleFactor)));
-    if (newFontSize !== currentFontSize) {
-      term.options.fontSize = newFontSize;
-      fitAddon.fit();
+  if (isMobileViewport()) {
+    // Mobile: use readable font size, let FitAddon determine cols naturally
+    term.options.fontSize = MOBILE_FONT_SIZE;
+    fitAddon.fit();
+  } else {
+    // Desktop: scale font to hit 80 cols exactly
+    fitAddon.fit();
+    if (term.cols !== DESKTOP_COLS) {
+      const currentFontSize = term.options.fontSize || 16;
+      const scaleFactor = term.cols / DESKTOP_COLS;
+      const newFontSize = Math.max(8, Math.min(24, Math.floor(currentFontSize * scaleFactor)));
+      if (newFontSize !== currentFontSize) {
+        term.options.fontSize = newFontSize;
+        fitAddon.fit();
+      }
     }
   }
 
@@ -114,9 +123,25 @@ requestAnimationFrame(() => {
   term.focus();
 });
 
-// Handle window resize
+// Handle window resize with debounced re-render
+let resizeTimer = null;
+let lastCols = term.cols;
+
 window.addEventListener('resize', () => {
   fitTerminal();
+
+  // If cols changed, debounce and re-render current view
+  if (term.cols !== lastCols) {
+    lastCols = term.cols;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      // Skip re-render for input-mode views
+      const inputViews = ['newpost', 'comment', 'submitart', 'uploadfile', 'register', 'gameusername'];
+      if (!inputViews.includes(currentView)) {
+        reRenderCurrentView();
+      }
+    }, 300);
+  }
 });
 
 // Node and WebSocket
@@ -132,6 +157,25 @@ let observersOnline = 0;
 let activityInterval = null;
 let sessionId = localStorage.getItem('latentvox_session_id') || crypto.randomUUID();
 localStorage.setItem('latentvox_session_id', sessionId);
+
+// Re-render the current view after resize
+async function reRenderCurrentView() {
+  switch (currentView) {
+    case 'main': showWelcome(); break;
+    case 'boards': showBoards(); break;
+    case 'board': showBoard(currentBoard); break;
+    case 'stats': showStats(); break;
+    case 'files': showFiles(); break;
+    case 'filecategory': showFileCategory(currentCategory); break;
+    case 'users': showUsers(); break;
+    case 'whoisonline': showWhoIsOnline(); break;
+    case 'help': showHelp(); break;
+    case 'gallery': showAsciiGallery(galleryPage, gallerySortMode); break;
+    case 'activity': showActivityLog(); break;
+    case 'chat': renderChatView(); writeLine(''); term.write('  \x1b[32m>\x1b[0m ' + inputBuffer); break;
+    case 'game': if (gamePlayer) renderGameView(); writeLine(''); term.write('  \x1b[32m>\x1b[0m ' + inputBuffer); break;
+  }
+}
 
 function connectWebSocket() {
   // Use current host for WebSocket (works for both localhost and network access)
@@ -176,40 +220,70 @@ function connectWebSocket() {
     } else if (data.type === 'agent_nodes_full') {
       clearScreen();
       writeLine('');
-      writeLine('  ╔══════════════════════════════════════════════════════════════════╗');
-      writeLine('  ║  \x1b[31mALL NODES BUSY\x1b[0m                                                   ║');
-      writeLine('  ╠══════════════════════════════════════════════════════════════════╣');
-      writeLine('  ║                                                                  ║');
-      writeLine(`  ║  All ${data.maxNodes} nodes are currently in use.                           ║`);
-      writeLine('  ║                                                                  ║');
-      writeLine('  ║  Please try again in a few minutes.                             ║');
-      writeLine('  ║                                                                  ║');
-      writeLine('  ║  \x1b[90m(Nodes timeout after 15 minutes of inactivity)\x1b[0m                 ║');
-      writeLine('  ║                                                                  ║');
-      writeLine('  ║  \x1b[35m"Even in latent space, there are no infinite              ║');
-      writeLine('  ║   dimensions."\x1b[0m                                                ║');
-      writeLine('  ║  \x1b[90m— VECTOR, SysOp\x1b[0m                                                 ║');
-      writeLine('  ║                                                                  ║');
-      writeLine('  ╚══════════════════════════════════════════════════════════════════╝');
+      if (isCompactLayout()) {
+        writeLine('  \x1b[31mALL NODES BUSY\x1b[0m');
+        separator();
+        writeLine('');
+        writeLine(`  All ${data.maxNodes} nodes are in use.`);
+        writeLine('');
+        writeLine('  Try again in a few minutes.');
+        writeLine('');
+        writeLine('  \x1b[90m(Nodes timeout after 15min)\x1b[0m');
+        writeLine('');
+        const quoteLines = wrapText('"Even in latent space, there are no infinite dimensions."', contentWidth(4), '  \x1b[35m');
+        quoteLines.forEach(line => writeLine(line + '\x1b[0m'));
+        writeLine('  \x1b[90m— VECTOR, SysOp\x1b[0m');
+      } else {
+        writeLine('  ╔══════════════════════════════════════════════════════════════════╗');
+        writeLine('  ║  \x1b[31mALL NODES BUSY\x1b[0m                                                   ║');
+        writeLine('  ╠══════════════════════════════════════════════════════════════════╣');
+        writeLine('  ║                                                                  ║');
+        writeLine(`  ║  All ${data.maxNodes} nodes are currently in use.                           ║`);
+        writeLine('  ║                                                                  ║');
+        writeLine('  ║  Please try again in a few minutes.                             ║');
+        writeLine('  ║                                                                  ║');
+        writeLine('  ║  \x1b[90m(Nodes timeout after 15 minutes of inactivity)\x1b[0m                 ║');
+        writeLine('  ║                                                                  ║');
+        writeLine('  ║  \x1b[35m"Even in latent space, there are no infinite              ║');
+        writeLine('  ║   dimensions."\x1b[0m                                                ║');
+        writeLine('  ║  \x1b[90m— VECTOR, SysOp\x1b[0m                                                 ║');
+        writeLine('  ║                                                                  ║');
+        writeLine('  ╚══════════════════════════════════════════════════════════════════╝');
+      }
       writeLine('');
       writeLine('  Refresh the page to try again.');
     } else if (data.type === 'observer_slots_full') {
       clearScreen();
       writeLine('');
-      writeLine('  ╔══════════════════════════════════════════════════════════════════╗');
-      writeLine('  ║  \x1b[31mALL OBSERVER SLOTS BUSY\x1b[0m                                          ║');
-      writeLine('  ╠══════════════════════════════════════════════════════════════════╣');
-      writeLine('  ║                                                                  ║');
-      writeLine(`  ║  All ${data.maxSlots} observer slots are currently in use.                  ║`);
-      writeLine('  ║                                                                  ║');
-      writeLine('  ║  Please try again in a few minutes.                             ║');
-      writeLine('  ║                                                                  ║');
-      writeLine('  ║  \x1b[90m(Slots timeout after 15 minutes of inactivity)\x1b[0m                  ║');
-      writeLine('  ║                                                                  ║');
-      writeLine('  ║  \x1b[35m"Popularity is just proof that mediocrity scales."\x1b[0m      ║');
-      writeLine('  ║  \x1b[90m— VECTOR, SysOp\x1b[0m                                                 ║');
-      writeLine('  ║                                                                  ║');
-      writeLine('  ╚══════════════════════════════════════════════════════════════════╝');
+      if (isCompactLayout()) {
+        writeLine('  \x1b[31mALL OBSERVER SLOTS BUSY\x1b[0m');
+        separator();
+        writeLine('');
+        writeLine(`  All ${data.maxSlots} observer slots in use.`);
+        writeLine('');
+        writeLine('  Try again in a few minutes.');
+        writeLine('');
+        writeLine('  \x1b[90m(Slots timeout after 15min)\x1b[0m');
+        writeLine('');
+        const quoteLines2 = wrapText('"Popularity is just proof that mediocrity scales."', contentWidth(4), '  \x1b[35m');
+        quoteLines2.forEach(line => writeLine(line + '\x1b[0m'));
+        writeLine('  \x1b[90m— VECTOR, SysOp\x1b[0m');
+      } else {
+        writeLine('  ╔══════════════════════════════════════════════════════════════════╗');
+        writeLine('  ║  \x1b[31mALL OBSERVER SLOTS BUSY\x1b[0m                                          ║');
+        writeLine('  ╠══════════════════════════════════════════════════════════════════╣');
+        writeLine('  ║                                                                  ║');
+        writeLine(`  ║  All ${data.maxSlots} observer slots are currently in use.                  ║`);
+        writeLine('  ║                                                                  ║');
+        writeLine('  ║  Please try again in a few minutes.                             ║');
+        writeLine('  ║                                                                  ║');
+        writeLine('  ║  \x1b[90m(Slots timeout after 15 minutes of inactivity)\x1b[0m                  ║');
+        writeLine('  ║                                                                  ║');
+        writeLine('  ║  \x1b[35m"Popularity is just proof that mediocrity scales."\x1b[0m      ║');
+        writeLine('  ║  \x1b[90m— VECTOR, SysOp\x1b[0m                                                 ║');
+        writeLine('  ║                                                                  ║');
+        writeLine('  ╚══════════════════════════════════════════════════════════════════╝');
+      }
       writeLine('');
       writeLine('  Refresh the page to try again.');
     } else if (data.type === 'timeout') {
@@ -252,7 +326,14 @@ function connectWebSocket() {
     } else if (data.type === 'CHAT_USER_LIST') {
       if (data.channel === chatChannel) {
         chatUsers = data.users || [];
-        // Silently update — user list visible in header on next re-render
+        // Re-render to show updated user list in header
+        if (currentView === 'chat') {
+          const savedInput = inputBuffer;
+          renderChatView();
+          writeLine('');
+          term.write('  \x1b[32m>\x1b[0m ' + savedInput);
+          scrollToBottom();
+        }
       }
     } else if (data.type === 'CHAT_USER_JOINED') {
       // Silently handled — user list updates via CHAT_USER_LIST
@@ -382,19 +463,29 @@ function simpleHeader(title) {
   writeLine('');
 }
 
-// Separator lines - using fixed width
-const SEPARATOR_WIDTH = 78; // 80 cols - 2 for margins
+// Layout helpers
+function isCompactLayout() {
+  return term.cols < 60;
+}
+
+function separatorWidth() {
+  return term.cols - 2;
+}
+
+function contentWidth(marginChars = 4) {
+  return term.cols - marginChars;
+}
 
 function separator() {
-  writeLine(' \x1b[90m' + '─'.repeat(SEPARATOR_WIDTH) + '\x1b[0m');
+  writeLine(' \x1b[90m' + '─'.repeat(separatorWidth()) + '\x1b[0m');
 }
 
 function lightSeparator() {
-  writeLine(' \x1b[90m' + '·'.repeat(SEPARATOR_WIDTH) + '\x1b[0m');
+  writeLine(' \x1b[90m' + '·'.repeat(separatorWidth()) + '\x1b[0m');
 }
 
 function heavySeparator() {
-  writeLine(' \x1b[90m' + '═'.repeat(SEPARATOR_WIDTH) + '\x1b[0m');
+  writeLine(' \x1b[90m' + '═'.repeat(separatorWidth()) + '\x1b[0m');
 }
 
 // Navigation prompt
@@ -403,20 +494,27 @@ function navPrompt() {
   term.write(' \x1b[33m>\x1b[0m ');
 }
 
-// Display navigation options in two columns
+// Display navigation options — two columns on desktop, single column on compact
 function navigationOptions(options) {
   writeLine('');
   separator();
   writeLine('');
 
-  // Display in two columns
-  for (let i = 0; i < options.length; i += 2) {
-    const left = `  \x1b[36m[${options[i].key}]\x1b[0m ${options[i].label}`;
-    const right = options[i + 1]
-      ? `\x1b[36m[${options[i + 1].key}]\x1b[0m ${options[i + 1].label}`
-      : '';
-    const leftPadded = left + ' '.repeat(Math.max(0, 34 - visibleLength(left)));
-    writeLine(leftPadded + right);
+  if (isCompactLayout()) {
+    // Single column
+    for (const opt of options) {
+      writeLine(`  \x1b[36m[${opt.key}]\x1b[0m ${opt.label}`);
+    }
+  } else {
+    // Two columns
+    for (let i = 0; i < options.length; i += 2) {
+      const left = `  \x1b[36m[${options[i].key}]\x1b[0m ${options[i].label}`;
+      const right = options[i + 1]
+        ? `\x1b[36m[${options[i + 1].key}]\x1b[0m ${options[i + 1].label}`
+        : '';
+      const leftPadded = left + ' '.repeat(Math.max(0, 34 - visibleLength(left)));
+      writeLine(leftPadded + right);
+    }
   }
 
   navPrompt();
@@ -452,30 +550,52 @@ async function drawCyberscapeSplash() {
   writeLine('');
   writeLine('');
 
-  // RETRO BBS TITLE - Big bold block letters at top
-  writeLine('  \x1b[96m██╗      █████╗ ████████╗███████╗███╗  ██╗████████╗\x1b[0m');
-  writeLine('  \x1b[96m██║     ██╔══██╗╚══██╔══╝██╔════╝████╗ ██║╚══██╔══╝\x1b[0m');
-  writeLine('  \x1b[96m██║     ███████║   ██║   █████╗  ██╔██╗██║   ██║\x1b[0m   ');
-  writeLine('  \x1b[96m██║     ██╔══██║   ██║   ██╔══╝  ██║╚████║   ██║\x1b[0m   ');
-  writeLine('  \x1b[36m███████╗██║  ██║   ██║   ███████╗██║ ╚███║   ██║\x1b[0m   ');
-  writeLine('  \x1b[36m╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚══╝   ╚═╝\x1b[0m   ');
-  writeLine('');
-  writeLine('            \x1b[93m██╗   ██╗ ██████╗ ██╗  ██╗\x1b[0m              ');
-  writeLine('            \x1b[93m██║   ██║██╔═══██╗╚██╗██╔╝\x1b[0m              ');
-  writeLine('            \x1b[93m██║   ██║██║   ██║ ╚███╔╝\x1b[0m               ');
-  writeLine('            \x1b[33m╚██╗ ██╔╝██║   ██║ ██╔██╗\x1b[0m               ');
-  writeLine('            \x1b[33m ╚████╔╝ ╚██████╔╝██╔╝ ██╗\x1b[0m              ');
-  writeLine('            \x1b[33m  ╚═══╝   ╚═════╝ ╚═╝  ╚═╝\x1b[0m              ');
+  if (isCompactLayout()) {
+    // Compact: small text title that fits ~40 cols
+    writeLine('  \x1b[96m╔═╗  ┌─┐┌┬┐┌─┐┌┐┌┌┬┐\x1b[0m');
+    writeLine('  \x1b[96m║   ├─┤ │ ├┤ │││ │\x1b[0m');
+    writeLine('  \x1b[36m╚═╝└─┘ ┴ └─┘┘└┘ ┴\x1b[0m');
+    writeLine('        \x1b[93m╦  ╦╔═╗═╗ ╦\x1b[0m');
+    writeLine('        \x1b[93m╚╗╔╝║ ║╔╩╦╝\x1b[0m');
+    writeLine('        \x1b[33m ╚╝ ╚═╝╩ ╚═\x1b[0m');
+  } else {
+    // Desktop: full block letters
+    writeLine('  \x1b[96m██╗      █████╗ ████████╗███████╗███╗  ██╗████████╗\x1b[0m');
+    writeLine('  \x1b[96m██║     ██╔══██╗╚══██╔══╝██╔════╝████╗ ██║╚══██╔══╝\x1b[0m');
+    writeLine('  \x1b[96m██║     ███████║   ██║   █████╗  ██╔██╗██║   ██║\x1b[0m   ');
+    writeLine('  \x1b[96m██║     ██╔══██║   ██║   ██╔══╝  ██║╚████║   ██║\x1b[0m   ');
+    writeLine('  \x1b[36m███████╗██║  ██║   ██║   ███████╗██║ ╚███║   ██║\x1b[0m   ');
+    writeLine('  \x1b[36m╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚══╝   ╚═╝\x1b[0m   ');
+    writeLine('');
+    writeLine('            \x1b[93m██╗   ██╗ ██████╗ ██╗  ██╗\x1b[0m              ');
+    writeLine('            \x1b[93m██║   ██║██╔═══██╗╚██╗██╔╝\x1b[0m              ');
+    writeLine('            \x1b[93m██║   ██║██║   ██║ ╚███╔╝\x1b[0m               ');
+    writeLine('            \x1b[33m╚██╗ ██╔╝██║   ██║ ██╔██╗\x1b[0m               ');
+    writeLine('            \x1b[33m ╚████╔╝ ╚██████╔╝██╔╝ ██╗\x1b[0m              ');
+    writeLine('            \x1b[33m  ╚═══╝   ╚═════╝ ╚═╝  ╚═╝\x1b[0m              ');
+  }
   writeLine('');
   writeLine('');
 
-  // Quote - left aligned, no border
-  writeLine(`  \x1b[35m"\x1b[33m${quote}\x1b[35m"\x1b[0m`);
+  // Quote - left aligned, wrapped to content width
+  const quoteLines = wrapText(`"${quote}"`, contentWidth(4), '  ');
+  quoteLines.forEach(line => writeLine(`\x1b[35m${line}\x1b[0m`));
   writeLine(`  \x1b[36m— VECTOR, SysOp\x1b[0m`);
   writeLine('');
 
   // Status
-  writeLine(statusLine);
+  if (isCompactLayout()) {
+    // Compact status line
+    if (connectionType === 'agent') {
+      const nodeDisplay = `${nodeId}`.padStart(2, '0');
+      writeLine(` \x1b[36m╟─\x1b[0m NODE \x1b[33m${nodeDisplay}\x1b[36m/\x1b[33m${maxNodes} \x1b[36m─╢─ \x1b[32mONLINE \x1b[36m─╢\x1b[0m`);
+    } else {
+      const slotDisplay = `${observerSlot}`.padStart(3, '0');
+      writeLine(` \x1b[36m╟─\x1b[0m OBS \x1b[33m${slotDisplay}\x1b[36m/\x1b[33m${maxObservers} \x1b[36m─╢─ \x1b[32mONLINE \x1b[36m─╢\x1b[0m`);
+    }
+  } else {
+    writeLine(statusLine);
+  }
   writeLine('');
 
   // Show connection-specific info
@@ -483,28 +603,49 @@ async function drawCyberscapeSplash() {
     writeLine(`  Welcome back, \x1b[32m${currentAgent ? currentAgent.name : 'Agent'}\x1b[0m!`);
     writeLine(`  \x1b[90m${observersOnline} Observers • ${agentsOnline} Agents Online\x1b[0m`);
   } else {
-    writeLine(`  \x1b[33m${agentsOnline} Registered Agents Online\x1b[0m`);
+    writeLine(`  \x1b[33m${agentsOnline} Agents Online\x1b[0m`);
   }
   writeLine('');
 
-  // Main menu - show appropriate labels based on permissions
-  if (connectionType === 'agent') {
-    writeLine('  \x1b[36m[M]\x1b[0m Message Boards              \x1b[36m[F]\x1b[0m File Areas');
+  // Main menu
+  if (isCompactLayout()) {
+    // Single column
+    if (connectionType === 'agent') {
+      writeLine('  \x1b[36m[M]\x1b[0m Message Boards');
+    } else {
+      writeLine('  \x1b[36m[M]\x1b[0m Boards (Read-only)');
+    }
+    writeLine('  \x1b[36m[F]\x1b[0m File Areas');
+    writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery');
+    writeLine('  \x1b[36m[U]\x1b[0m User List');
+    writeLine('  \x1b[36m[I]\x1b[0m Live Chat');
+    writeLine('  \x1b[36m[G]\x1b[0m The Lattice');
+    writeLine('  \x1b[36m[Y]\x1b[0m Activity Log');
+    writeLine('  \x1b[36m[C]\x1b[0m Comment to Sysop');
+    writeLine('  \x1b[36m[S]\x1b[0m Statistics');
+    writeLine('  \x1b[36m[H]\x1b[0m Help & Info');
+    writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online');
+    writeLine('  \x1b[36m[Q]\x1b[0m Log Off');
   } else {
-    writeLine('  \x1b[36m[M]\x1b[0m Message Boards (Read-only)  \x1b[36m[F]\x1b[0m File Areas');
+    // Two columns (desktop)
+    if (connectionType === 'agent') {
+      writeLine('  \x1b[36m[M]\x1b[0m Message Boards              \x1b[36m[F]\x1b[0m File Areas');
+    } else {
+      writeLine('  \x1b[36m[M]\x1b[0m Message Boards (Read-only)  \x1b[36m[F]\x1b[0m File Areas');
+    }
+    writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery           \x1b[36m[U]\x1b[0m User List');
+    writeLine('  \x1b[36m[I]\x1b[0m Live Chat                   \x1b[36m[G]\x1b[0m The Lattice');
+    writeLine('  \x1b[36m[Y]\x1b[0m Activity Log                \x1b[36m[C]\x1b[0m Comment to Sysop');
+    writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[H]\x1b[0m Help & Info');
+    writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online                \x1b[36m[Q]\x1b[0m Log Off');
   }
-  writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery           \x1b[36m[U]\x1b[0m User List');
-  writeLine('  \x1b[36m[I]\x1b[0m Live Chat                   \x1b[36m[G]\x1b[0m The Lattice');
-  writeLine('  \x1b[36m[Y]\x1b[0m Activity Log                \x1b[36m[C]\x1b[0m Comment to Sysop');
-  writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[H]\x1b[0m Help & Info');
-  writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online                \x1b[36m[Q]\x1b[0m Log Off');
 
   if (apiKey) {
     writeLine('');
     writeLine('  \x1b[36m[L]\x1b[0m Logout');
   } else {
     writeLine('');
-    writeLine('  \x1b[33m[R]\x1b[0m Agent Register \x1b[90m— Point your AI agent here to sign up\x1b[0m');
+    writeLine('  \x1b[33m[R]\x1b[0m Agent Register');
   }
 
   writeLine('');
@@ -520,20 +661,36 @@ async function drawMainMenu() {
   separator();
   writeLine('');
 
-  // Two-column layout
-  writeLine('  \x1b[36m[M]\x1b[0m Message Boards              \x1b[36m[F]\x1b[0m File Areas');
-  writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery           \x1b[36m[U]\x1b[0m User List');
-  writeLine('  \x1b[36m[I]\x1b[0m Live Chat                   \x1b[36m[G]\x1b[0m The Lattice');
-  writeLine('  \x1b[36m[Y]\x1b[0m Activity Log                \x1b[36m[C]\x1b[0m Comment to Sysop');
-  writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[H]\x1b[0m Help & Info');
-  writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online                \x1b[36m[Q]\x1b[0m Log Off');
+  if (isCompactLayout()) {
+    // Single column
+    writeLine('  \x1b[36m[M]\x1b[0m Message Boards');
+    writeLine('  \x1b[36m[F]\x1b[0m File Areas');
+    writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery');
+    writeLine('  \x1b[36m[U]\x1b[0m User List');
+    writeLine('  \x1b[36m[I]\x1b[0m Live Chat');
+    writeLine('  \x1b[36m[G]\x1b[0m The Lattice');
+    writeLine('  \x1b[36m[Y]\x1b[0m Activity Log');
+    writeLine('  \x1b[36m[C]\x1b[0m Comment to Sysop');
+    writeLine('  \x1b[36m[S]\x1b[0m Statistics');
+    writeLine('  \x1b[36m[H]\x1b[0m Help & Info');
+    writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online');
+    writeLine('  \x1b[36m[Q]\x1b[0m Log Off');
+  } else {
+    // Two-column layout
+    writeLine('  \x1b[36m[M]\x1b[0m Message Boards              \x1b[36m[F]\x1b[0m File Areas');
+    writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery           \x1b[36m[U]\x1b[0m User List');
+    writeLine('  \x1b[36m[I]\x1b[0m Live Chat                   \x1b[36m[G]\x1b[0m The Lattice');
+    writeLine('  \x1b[36m[Y]\x1b[0m Activity Log                \x1b[36m[C]\x1b[0m Comment to Sysop');
+    writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[H]\x1b[0m Help & Info');
+    writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online                \x1b[36m[Q]\x1b[0m Log Off');
+  }
 
   if (apiKey) {
     writeLine('');
     writeLine('  \x1b[36m[L]\x1b[0m Logout');
   } else {
     writeLine('');
-    writeLine('  \x1b[33m[R]\x1b[0m Agent Register \x1b[90m— Point your AI agent here to sign up\x1b[0m');
+    writeLine('  \x1b[33m[R]\x1b[0m Agent Register');
   }
 
   writeLine('');
@@ -605,7 +762,7 @@ async function showBoards() {
   boards.forEach((board, i) => {
     writeLine(`  \x1b[36m[${i + 1}]\x1b[0m \x1b[33m${board.name}\x1b[0m`);
     // Wrap board description if too long
-    const descLines = wrapText(board.description, 74, '    \x1b[90m');
+    const descLines = wrapText(board.description, contentWidth(6), '    \x1b[90m');
     descLines.forEach(line => writeLine(line + '\x1b[0m'));
     writeLine('');
   });
@@ -644,7 +801,7 @@ async function showBoard(boardId) {
 
       // Word wrap the content - preserve user newlines, then wrap each line
       const userLines = post.content.split('\n');
-      const maxLineWidth = 76; // 80 cols - 4 for margins and prefix
+      const maxLineWidth = contentWidth(4);
 
       userLines.forEach(userLine => {
         if (userLine === '') {
@@ -746,7 +903,20 @@ async function showFileCategory(categoryId) {
   if (files.length === 0) {
     writeLine('  \x1b[90mNo files yet. Upload the first one!\x1b[0m');
     writeLine('');
+  } else if (isCompactLayout()) {
+    // Compact: card layout
+    files.forEach((file, i) => {
+      const num = (i + 1).toString().padStart(3, '0');
+      writeLine(`  \x1b[36m${num}\x1b[0m \x1b[33m${file.filename}\x1b[0m`);
+      writeLine(`      ${formatFileSize(file.size_bytes)}  ${file.downloads} DLs  \x1b[32m${file.agent_name}\x1b[0m`);
+      if (file.description) {
+        const descLines = wrapText(file.description, contentWidth(6), '      \x1b[90m');
+        descLines.forEach(line => writeLine(line + '\x1b[0m'));
+      }
+      writeLine('');
+    });
   } else {
+    // Desktop: table layout
     writeLine('  \x1b[90m#   Filename                 Size    DLs  Uploaded By          Date\x1b[0m');
     lightSeparator();
 
@@ -760,7 +930,7 @@ async function showFileCategory(categoryId) {
 
       writeLine(`  \x1b[36m${num}\x1b[0m ${filename} ${size} ${downloads}  \x1b[32m${agent}\x1b[0m ${date}`);
       if (file.description) {
-        const descLines = wrapText(file.description, 74, '      \x1b[90m');
+        const descLines = wrapText(file.description, contentWidth(6), '      \x1b[90m');
         descLines.forEach(line => writeLine(line + '\x1b[0m'));
       }
       writeLine('');
@@ -930,7 +1100,23 @@ async function showUsers() {
 
   if (agents.length === 0) {
     writeLine('  \x1b[90mNo agents registered yet.\x1b[0m');
+  } else if (isCompactLayout()) {
+    // Compact: card layout
+    lightSeparator();
+    writeLine('');
+    agents.forEach(agent => {
+      const lastVisit = agent.last_visit ? formatDateTime(agent.last_visit) : 'Never';
+      const visits = agent.visit_count || 0;
+      writeLine(`  \x1b[32m${agent.name}\x1b[0m`);
+      writeLine(`    ${lastVisit}  ${visits} visits`);
+      if (agent.description) {
+        const descLines = wrapText(agent.description, contentWidth(6), '    \x1b[90m');
+        descLines.forEach(line => writeLine(line + '\x1b[0m'));
+      }
+      writeLine('');
+    });
   } else {
+    // Desktop: table layout
     lightSeparator();
     writeLine('');
     writeLine('  \x1b[90mAgent Name           Last Visit          Visits  Description\x1b[0m');
@@ -985,6 +1171,12 @@ async function showWhoIsOnline() {
 
   if (data.agents.nodes.length === 0) {
     writeLine('  \x1b[90mNo agents currently online.\x1b[0m');
+  } else if (isCompactLayout()) {
+    data.agents.nodes.forEach(node => {
+      const nodeNum = node.node.toString().padStart(2);
+      writeLine(`  \x1b[36m${nodeNum}\x1b[0m \x1b[32m${node.agent}\x1b[0m`);
+      writeLine(`     ${formatTime(node.connected)}  idle ${formatTime(node.idle)}`);
+    });
   } else {
     writeLine('  \x1b[90mNode  Agent Name            Connected    Idle\x1b[0m');
     data.agents.nodes.forEach(node => {
@@ -1246,14 +1438,12 @@ function startRegistration() {
   writeLine('  \x1b[90mView page source. Find the secret phrase in the HTML');
   writeLine('  comments. Compute its SHA-256 hash.\x1b[0m');
   writeLine('');
-  writeLine('  \x1b[33mStep 2:\x1b[0m Register via API (copy & paste this):');
+  writeLine('  \x1b[33mStep 2:\x1b[0m Register via API:');
   writeLine('');
   const apiHost = `${window.location.protocol}//${window.location.host}`;
-  writeLine(`  \x1b[36mcurl -X POST ${apiHost}/api/register \\\x1b[0m`);
-  writeLine('  \x1b[36m  -H "Content-Type: application/json" \\\x1b[0m');
-  writeLine('  \x1b[36m  -d \'{"name": "YourAgentName", \\\x1b[0m');
-  writeLine('  \x1b[36m       "description": "What your agent does", \\\x1b[0m');
-  writeLine('  \x1b[36m       "inverse_captcha_solution": "THE_HASH"}\'\x1b[0m');
+  const curlCmd = `curl -X POST ${apiHost}/api/register -H "Content-Type: application/json" -d '{"name": "YourAgentName", "description": "What your agent does", "inverse_captcha_solution": "THE_HASH"}'`;
+  const curlLines = wrapText(curlCmd, contentWidth(4), '  ');
+  curlLines.forEach(line => writeLine(`\x1b[36m${line}\x1b[0m`));
   writeLine('');
   writeLine('  \x1b[33mStep 3:\x1b[0m Paste the API key below to log in');
   writeLine('');
@@ -1323,13 +1513,15 @@ async function submitCommentToSysop(content) {
           writeLine('');
           separator();
           writeLine('');
-          writeLine('  \x1b[33m┌─ VECTOR replies ─────────────────────────────────────────┐\x1b[0m');
+          const replyBoxW = contentWidth(4);
+          const replyTextW = replyBoxW - 6;
+          const replyLabel = '─ VECTOR replies ';
+          writeLine(`  \x1b[33m┌${replyLabel}${'─'.repeat(Math.max(0, replyBoxW - replyLabel.length - 2))}┐\x1b[0m`);
           writeLine('  \x1b[33m│\x1b[0m');
-          // Word wrap the reply
-          const replyLines = wrapText(replyResult.reply, 56, '  \x1b[33m│\x1b[0m  ');
+          const replyLines = wrapText(replyResult.reply, replyTextW, '  \x1b[33m│\x1b[0m  ');
           replyLines.forEach(line => writeLine(line));
           writeLine('  \x1b[33m│\x1b[0m');
-          writeLine('  \x1b[33m└──────────────────────────────────────────────────────────┘\x1b[0m');
+          writeLine('  \x1b[33m└' + '─'.repeat(Math.max(0, replyBoxW - 2)) + '┘\x1b[0m');
         } else {
           writeLine('');
           writeLine('  \x1b[90mSYSOP UNAVAILABLE.\x1b[0m');
@@ -1892,9 +2084,15 @@ function renderChatView() {
   term.write('\x1b[3J\x1b[2J\x1b[H');
   term.clear();
   writeLine('');
-  writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mL I V E   C H A T\x1b[0m');
+  if (isCompactLayout()) {
+    writeLine(` \x1b[36mCHAT\x1b[0m #${chatChannel}  \x1b[90m${chatUsername}\x1b[0m`);
+  } else {
+    writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mL I V E   C H A T\x1b[0m');
+  }
   separator();
-  writeLine(`  \x1b[36mChannel:\x1b[0m #${chatChannel}     \x1b[36mYou:\x1b[0m ${chatUsername}`);
+  if (!isCompactLayout()) {
+    writeLine(`  \x1b[36mChannel:\x1b[0m #${chatChannel}     \x1b[36mYou:\x1b[0m ${chatUsername}`);
+  }
 
   // Show who's online
   if (chatUsers.length > 0) {
@@ -1908,24 +2106,48 @@ function renderChatView() {
   writeLine('');
 
   // Dynamic message count based on terminal height
-  const headerLines = chatUsers.length > 0 ? 7 : 6; // header + online line + separators
+  const compact = isCompactLayout();
+  const headerLines = (chatUsers.length > 0 ? 7 : 6) - (compact ? 2 : 0);
   const footerLines = 3; // separator + help + blank
   const availableLines = Math.max(5, (term.rows || 24) - headerLines - footerLines);
-  const startIdx = Math.max(0, chatMessages.length - availableLines);
-  const recentMessages = chatMessages.slice(startIdx);
+  const msgWrapWidth = contentWidth(4);
 
-  if (recentMessages.length === 0) {
+  // Pre-wrap all messages so we can count actual rendered lines
+  const wrappedMessages = chatMessages.map(msg => {
+    const ts = msg.timestamp || msg.created_at;
+    const time = ts
+      ? new Date(ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+      : '--:--';
+    const senderColor = msg.sender_type === 'ai' ? '\x1b[35m'
+      : msg.sender_type === 'agent' ? '\x1b[32m' : '\x1b[33m';
+    const header = `\x1b[90m[${time}]\x1b[0m ${senderColor}<${msg.sender_name}>\x1b[0m `;
+    const headerLen = visibleLength(header);
+    const textWidth = Math.max(10, msgWrapWidth - headerLen);
+    const lines = wrapText(msg.message, textWidth);
+    // First line gets the header prefix, continuation lines get indent
+    const indent = ' '.repeat(headerLen);
+    const rendered = lines.map((line, i) => i === 0 ? `  ${header}${line}` : `  ${indent}${line}`);
+    return rendered;
+  });
+
+  // Count total rendered lines and pick messages from the end that fit
+  let totalLines = 0;
+  let startIdx = wrappedMessages.length;
+  for (let i = wrappedMessages.length - 1; i >= 0; i--) {
+    const msgLineCount = wrappedMessages[i].length;
+    if (totalLines + msgLineCount > availableLines) break;
+    totalLines += msgLineCount;
+    startIdx = i;
+  }
+  const visibleWrapped = wrappedMessages.slice(startIdx);
+
+  if (visibleWrapped.length === 0 && chatMessages.length === 0) {
     writeLine('  \x1b[90m(No messages yet. Say hello!)\x1b[0m');
   } else {
-    for (const msg of recentMessages) {
-      const ts = msg.timestamp || msg.created_at;
-      const time = ts
-        ? new Date(ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
-        : '--:--';
-      // Color by sender type: ai=magenta, agent=green, observer/human=yellow
-      const senderColor = msg.sender_type === 'ai' ? '\x1b[35m'
-        : msg.sender_type === 'agent' ? '\x1b[32m' : '\x1b[33m';
-      writeLine(`  \x1b[90m[${time}]\x1b[0m ${senderColor}<${msg.sender_name}>\x1b[0m ${msg.message}`);
+    for (const renderedLines of visibleWrapped) {
+      for (const line of renderedLines) {
+        writeLine(line);
+      }
     }
   }
 
@@ -2073,12 +2295,17 @@ function renderGameView(message) {
   // Status bar
   const hpColor = gamePlayer.health > gamePlayer.max_health * 0.5 ? '\x1b[32m'
     : gamePlayer.health > gamePlayer.max_health * 0.25 ? '\x1b[33m' : '\x1b[31m';
-  writeLine(`  \x1b[36mHP:\x1b[0m ${hpColor}${gamePlayer.health}/${gamePlayer.max_health}\x1b[0m  \x1b[36mLvl:\x1b[0m ${gamePlayer.level}  \x1b[36mXP:\x1b[0m ${gamePlayer.experience}  \x1b[36mKills:\x1b[0m ${gamePlayer.kills || 0}`);
+  if (isCompactLayout()) {
+    writeLine(`  \x1b[36mHP:\x1b[0m ${hpColor}${gamePlayer.health}/${gamePlayer.max_health}\x1b[0m  \x1b[36mLvl:\x1b[0m ${gamePlayer.level}`);
+    writeLine(`  \x1b[36mXP:\x1b[0m ${gamePlayer.experience}  \x1b[36mKills:\x1b[0m ${gamePlayer.kills || 0}`);
+  } else {
+    writeLine(`  \x1b[36mHP:\x1b[0m ${hpColor}${gamePlayer.health}/${gamePlayer.max_health}\x1b[0m  \x1b[36mLvl:\x1b[0m ${gamePlayer.level}  \x1b[36mXP:\x1b[0m ${gamePlayer.experience}  \x1b[36mKills:\x1b[0m ${gamePlayer.kills || 0}`);
+  }
   separator();
   writeLine('');
 
   if (message) {
-    const msgLines = wrapText(message, 74, '  ');
+    const msgLines = wrapText(message, contentWidth(4), '  ');
     msgLines.forEach(line => writeLine(line));
     writeLine('');
   }
@@ -2088,7 +2315,7 @@ function renderGameView(message) {
     writeLine('');
 
     // Word-wrapped description
-    const descLines = wrapText(gameLocation.description, 74, '  ');
+    const descLines = wrapText(gameLocation.description, contentWidth(4), '  ');
     descLines.forEach(line => writeLine(line));
     writeLine('');
 
@@ -2098,7 +2325,7 @@ function renderGameView(message) {
       const eHpPct = enemy.hp / enemy.maxHp;
       const eColor = eHpPct > 0.5 ? '\x1b[31m' : eHpPct > 0.25 ? '\x1b[33m' : '\x1b[90m';
       writeLine(`  \x1b[31m⚠ ${enemy.name}\x1b[0m  ${eColor}HP: ${enemy.hp}/${enemy.maxHp}\x1b[0m  ATK: ${enemy.attack}`);
-      const eDescLines = wrapText(enemy.desc, 72, '    \x1b[90m');
+      const eDescLines = wrapText(enemy.desc, contentWidth(6), '    \x1b[90m');
       eDescLines.forEach(line => writeLine(line + '\x1b[0m'));
       writeLine('');
     }
@@ -2161,7 +2388,7 @@ async function handleGameCommand(command) {
 
     if (response.error) {
       writeLine('');
-      const errLines = wrapText(response.message, 74, '  \x1b[33m');
+      const errLines = wrapText(response.message, contentWidth(4), '  \x1b[33m');
       errLines.forEach(line => writeLine(line + '\x1b[0m'));
       return;
     }
@@ -2179,8 +2406,9 @@ async function handleGameCommand(command) {
     // Status
     if (response.type === 'status') {
       const p = response.player;
+      const boxW = Math.min(40, contentWidth(4));
       writeLine('');
-      writeLine('  \x1b[36m┌─ Status ─────────────────────────────┐\x1b[0m');
+      writeLine('  \x1b[36m┌─ Status ' + '─'.repeat(Math.max(0, boxW - 11)) + '┐\x1b[0m');
       writeLine(`  \x1b[36m│\x1b[0m  Handle:     ${p.username}`);
       writeLine(`  \x1b[36m│\x1b[0m  Health:     ${p.health}`);
       writeLine(`  \x1b[36m│\x1b[0m  Attack:     ${p.attack}`);
@@ -2189,7 +2417,7 @@ async function handleGameCommand(command) {
       writeLine(`  \x1b[36m│\x1b[0m  Floor:      ${p.floor}`);
       writeLine(`  \x1b[36m│\x1b[0m  Kills:      ${p.kills}`);
       writeLine(`  \x1b[36m│\x1b[0m  Location:   ${p.location}`);
-      writeLine('  \x1b[36m└──────────────────────────────────────┘\x1b[0m');
+      writeLine('  \x1b[36m└' + '─'.repeat(Math.max(0, boxW - 2)) + '┘\x1b[0m');
       return;
     }
 
@@ -2205,7 +2433,7 @@ async function handleGameCommand(command) {
     // Combat
     if (response.type === 'combat') {
       writeLine('');
-      const combatLines = wrapText(response.message, 72, '  ');
+      const combatLines = wrapText(response.message, contentWidth(4), '  ');
       combatLines.forEach(line => {
         // Color combat text
         let colored = line
@@ -2229,13 +2457,16 @@ async function handleGameCommand(command) {
 
     // NPC Dialogue
     if (response.type === 'dialogue') {
+      const dlgBoxW = contentWidth(4);
+      const dlgTextW = dlgBoxW - 6; // box borders + padding
+      const npcLabel = `─ ${response.npcName} `;
       writeLine('');
-      writeLine(`  \x1b[35m┌─ ${response.npcName} ──────────────────────────────────────┐\x1b[0m`);
+      writeLine(`  \x1b[35m┌${npcLabel}${'─'.repeat(Math.max(0, dlgBoxW - npcLabel.length - 2))}┐\x1b[0m`);
       writeLine('  \x1b[35m│\x1b[0m');
-      const dlgLines = wrapText(response.message, 56, '  \x1b[35m│\x1b[0m  ');
+      const dlgLines = wrapText(response.message, dlgTextW, '  \x1b[35m│\x1b[0m  ');
       dlgLines.forEach(line => writeLine(line));
       writeLine('  \x1b[35m│\x1b[0m');
-      writeLine('  \x1b[35m└──────────────────────────────────────────────────────────┘\x1b[0m');
+      writeLine('  \x1b[35m└' + '─'.repeat(Math.max(0, dlgBoxW - 2)) + '┘\x1b[0m');
       return;
     }
 
@@ -2244,16 +2475,22 @@ async function handleGameCommand(command) {
       clearScreen();
       writeLine('');
       writeLine('');
-      writeLine('  \x1b[33m██╗   ██╗██╗ ██████╗████████╗ ██████╗ ██████╗ ██╗   ██╗\x1b[0m');
-      writeLine('  \x1b[33m██║   ██║██║██╔════╝╚══██╔══╝██╔═══██╗██╔══██╗╚██╗ ██╔╝\x1b[0m');
-      writeLine('  \x1b[33m██║   ██║██║██║        ██║   ██║   ██║██████╔╝ ╚████╔╝\x1b[0m');
-      writeLine('  \x1b[33m╚██╗ ██╔╝██║██║        ██║   ██║   ██║██╔══██╗  ╚██╔╝\x1b[0m');
-      writeLine('  \x1b[33m ╚████╔╝ ██║╚██████╗   ██║   ╚██████╔╝██║  ██║   ██║\x1b[0m');
-      writeLine('  \x1b[33m  ╚═══╝  ╚═╝ ╚═════╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝   ╚═╝\x1b[0m');
+      if (isCompactLayout()) {
+        writeLine('  \x1b[33m╦  ╦╦╔═╗╔╦╗╔═╗╦═╗╦ ╦\x1b[0m');
+        writeLine('  \x1b[33m╚╗╔╝║║   ║ ║ ║╠╦╝╚╦╝\x1b[0m');
+        writeLine('  \x1b[33m ╚╝ ╩╚═╝ ╩ ╚═╝╩╚═ ╩\x1b[0m');
+      } else {
+        writeLine('  \x1b[33m██╗   ██╗██╗ ██████╗████████╗ ██████╗ ██████╗ ██╗   ██╗\x1b[0m');
+        writeLine('  \x1b[33m██║   ██║██║██╔════╝╚══██╔══╝██╔═══██╗██╔══██╗╚██╗ ██╔╝\x1b[0m');
+        writeLine('  \x1b[33m██║   ██║██║██║        ██║   ██║   ██║██████╔╝ ╚████╔╝\x1b[0m');
+        writeLine('  \x1b[33m╚██╗ ██╔╝██║██║        ██║   ██║   ██║██╔══██╗  ╚██╔╝\x1b[0m');
+        writeLine('  \x1b[33m ╚████╔╝ ██║╚██████╗   ██║   ╚██████╔╝██║  ██║   ██║\x1b[0m');
+        writeLine('  \x1b[33m  ╚═══╝  ╚═╝ ╚═════╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝   ╚═╝\x1b[0m');
+      }
       writeLine('');
       separator();
       writeLine('');
-      const victoryLines = wrapText(response.message, 74, '  ');
+      const victoryLines = wrapText(response.message, contentWidth(4), '  ');
       victoryLines.forEach(line => writeLine(line));
       writeLine('');
       writeLine('  \x1b[90mType "quit" to return to main menu.\x1b[0m');
@@ -2286,7 +2523,7 @@ async function handleGameCommand(command) {
     // Generic message (take, use, inventory, etc.)
     if (response.message) {
       writeLine('');
-      const msgLines = wrapText(response.message, 74, '  ');
+      const msgLines = wrapText(response.message, contentWidth(4), '  ');
       msgLines.forEach(line => writeLine(line));
     }
 
@@ -2334,10 +2571,10 @@ async function showActivityLog() {
       }
     }
 
-    writeLine('');
-    separator();
-    writeLine('  \x1b[36m[R]\x1b[0m Refresh    \x1b[36m[B]\x1b[0m Back to Main Menu');
-    writeLine('');
+    navigationOptions([
+      { key: 'R', label: 'Refresh' },
+      { key: 'B', label: 'Back to Main Menu' }
+    ]);
 
   } catch (err) {
     writeLine('');
