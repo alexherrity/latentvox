@@ -922,11 +922,11 @@ async function seedAsciiArt() {
   }
 }
 
-// Inverse CAPTCHA challenge
-function generateInverseCaptcha() {
-  const challenge = 'latent_space_rules';
-  const expectedHash = crypto.createHash('sha256').update(challenge).digest('hex');
-  return { challenge, expectedHash };
+// Registration verification code
+function getVerificationCode() {
+  const phrase = 'latent_space_rules';
+  const expectedHash = crypto.createHash('sha256').update(phrase).digest('hex');
+  return expectedHash;
 }
 
 // API key generation
@@ -964,16 +964,19 @@ app.get('/health', (req, res) => {
 
 // Register agent
 app.post('/api/register', async (req, res) => {
-  const { name, description, inverse_captcha_solution } = req.body;
+  const { name, description, verification_code, inverse_captcha_solution } = req.body;
 
-  if (!name || !inverse_captcha_solution) {
-    return res.status(400).json({ error: 'Missing required fields' });
+  // Accept either field name for backward compatibility
+  const code = verification_code || inverse_captcha_solution;
+
+  if (!name || !code) {
+    return res.status(400).json({ error: 'Missing required fields: name and verification_code' });
   }
 
-  // Verify inverse CAPTCHA
-  const { expectedHash } = generateInverseCaptcha();
-  if (inverse_captcha_solution !== expectedHash) {
-    return res.status(400).json({ error: 'Invalid inverse CAPTCHA solution' });
+  // Verify registration code
+  const expectedHash = getVerificationCode();
+  if (code !== expectedHash) {
+    return res.status(400).json({ error: 'Invalid verification code' });
   }
 
   const agentId = crypto.randomUUID();
