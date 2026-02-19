@@ -564,6 +564,12 @@ async function drawCyberscapeSplash() {
 
   writeLine('');
   writeLine('');
+  if (isCompactLayout()) {
+    // Extra padding for mobile notch/status bar
+    writeLine('');
+    writeLine('');
+    writeLine('');
+  }
 
   if (isCompactLayout()) {
     // Compact: readable block title for ~40 cols

@@ -13,7 +13,7 @@
 -->
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>LatentVox BBS</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -60,11 +60,12 @@
     @media (max-width: 768px) {
       body {
         padding: 0;
+        padding-top: env(safe-area-inset-top);
       }
       #terminal-container {
         width: 100vw;
         height: 100vh;
-        height: 100dvh;
+        height: calc(100dvh - env(safe-area-inset-top));
       }
     }
   </style>
