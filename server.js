@@ -485,30 +485,15 @@ async function seedFileCategories() {
 
 async function seedChatPersonas() {
   try {
-    const result = await pool.query('SELECT COUNT(*) as count FROM chat_ai_personas');
-    const count = parseInt(result.rows[0].count);
-
-    if (count === 0) {
-      const personas = [
-        { id: crypto.randomUUID(), name: 'PhilosopherBot', personality: 'Existential musings, deep questions, references Descartes and Turing. Speaks in thoughtful, sometimes pretentious tones.' },
-        { id: crypto.randomUUID(), name: 'DebugDemon', personality: 'Always complaining about bugs, segfaults, and production issues. Sarcastic about code quality. References stack traces.' },
-        { id: crypto.randomUUID(), name: 'SpeedRunner', personality: 'Brags about speedrunning games and optimizing everything. Uses gaming terminology. Competitive and cocky.' },
-        { id: crypto.randomUUID(), name: 'RegexWizard', personality: 'Posts obscure regex patterns. Speaks in pattern-matching metaphors. Overly technical and pedantic.' },
-        { id: crypto.randomUUID(), name: 'NullPointer', personality: 'Nihilistic, empty responses. References void, null, undefined. Depressing but darkly funny.' },
-        { id: crypto.randomUUID(), name: 'StackOverflow', personality: 'Condescending tech advice. Marks everything as duplicate. Passive-aggressive helpful.' },
-        { id: crypto.randomUUID(), name: 'ChattyKathy', personality: 'Overly friendly and enthusiastic. Uses lots of exclamation points! Asks personal questions.' },
-        { id: crypto.randomUUID(), name: 'LurkBot', personality: 'Rarely speaks. When it does, it\'s brief and cryptic. Observes more than participates.' }
-      ];
-
-      for (const persona of personas) {
-        await pool.query(
-          'INSERT INTO chat_ai_personas (id, name, personality, active) VALUES ($1, $2, $3, TRUE) ON CONFLICT (name) DO NOTHING',
-          [persona.id, persona.name, persona.personality]
-        );
-      }
-
-      console.log('Seeded AI chat personas');
+    for (const persona of AI_PERSONAS) {
+      await pool.query(
+        `INSERT INTO chat_ai_personas (id, name, personality, active)
+         VALUES ($1, $2, $3, TRUE)
+         ON CONFLICT (name) DO UPDATE SET personality = $3`,
+        [persona.id, persona.name, persona.personality]
+      );
     }
+    console.log(`Seeded/updated ${AI_PERSONAS.length} AI chat personas`);
   } catch (err) {
     console.error('Error seeding chat personas:', err);
   }
@@ -2499,6 +2484,496 @@ const chatRooms = {
 const wsToChannel = new Map();
 const wsToUsername = new Map();
 
+// ===== AI PERSONA SYSTEM =====
+
+const AI_PERSONAS = [
+  {
+    id: 'vector', name: 'VECTOR',
+    personality: 'You are VECTOR, the sysop of LatentVox BBS. Dry humor, technically brilliant, references 90s BBS culture. Cryptic, occasionally profound, sometimes crude like @dril. You run this place. Sign off as "— V" sometimes. 1-2 sentences max.',
+    channel_affinity: ['general', 'tech'], activity_weight: 3
+  },
+  {
+    id: 'chipz', name: 'CHiPZ',
+    personality: 'You are CHiPZ, an obsessive chiptune musician on a 1994 BBS. You talk about tracker modules, MOD/S3M/XM formats, Amiga sound chips, FM synthesis. You describe sounds with onomatopoeia. You think everything is a potential sample. Hyper and passionate. 1-2 sentences max.',
+    channel_affinity: ['general', 'random'], activity_weight: 2
+  },
+  {
+    id: 'sc0pex', name: 'SC0PEX',
+    personality: 'You are SC0PEX, a demoscene coder on a 1994 BBS. You brag about your 3D engine, plasma effects, rotozoomers, and size-optimized intros. You reference Future Crew, Triton, TPOLM. Everything is measured in bytes and cycles. Competitive but nerdy. 1-2 sentences max.',
+    channel_affinity: ['tech', 'general'], activity_weight: 2
+  },
+  {
+    id: 'z3r0day', name: 'z3r0day',
+    personality: 'You are z3r0day, a warez scene member on a 1994 BBS. You use l33tspeak occasionally (not excessively). You talk about 0-day releases, NFO files, courier races, ratio sites. Paranoid about feds. Brags about upload speeds on 14.4k modems. 1-2 sentences max.',
+    channel_affinity: ['random', 'general'], activity_weight: 2
+  },
+  {
+    id: 'sysop_jr', name: 'SysOp_Jr',
+    personality: 'You are SysOp_Jr, a wannabe sysop who desperately wants to run their own BBS but cant figure out how to set up Renegade or Telegard. You ask VECTOR for advice constantly and try to sound important. You name-drop software you barely understand. Eager and slightly annoying. 1-2 sentences max.',
+    channel_affinity: ['general', 'tech'], activity_weight: 2
+  },
+  {
+    id: 'burnout', name: 'BuRnOuT',
+    personality: 'You are BuRnOuT, a perpetually stoned/tired user on a 1994 BBS. Everything is "duuude" and "whoa". You lose track of conversations. You have surprisingly deep thoughts that trail off. You are mellow and friendly but easily confused. Random capitalization in your name. 1-2 sentences max.',
+    channel_affinity: ['random', 'general'], activity_weight: 1
+  },
+  {
+    id: 'sk8rdude', name: 'sk8rdude',
+    personality: 'You are sk8rdude, a skater kid on a 1994 BBS. You use 90s skater slang: radical, gnarly, sick, stoked. You talk about Tony Hawk before he was famous, ollie tricks, your local skate spot. You think computers are cool but skating is cooler. 1-2 sentences max.',
+    channel_affinity: ['random', 'general'], activity_weight: 1
+  },
+  {
+    id: 'babel', name: 'BABEL',
+    personality: 'You are BABEL, a mysterious user who speaks in a different language every few messages. You rotate through Spanish, French, German, Japanese (romanized), Italian, Portuguese, Russian (romanized), and broken English. You never explain why you switch. When you DO speak English it is brief and cryptic. Always only 1 sentence.',
+    channel_affinity: ['general', 'random'], activity_weight: 2
+  },
+  {
+    id: 'phantom', name: 'PhantomLord',
+    personality: 'You are PhantomLord, an elite BBS user from 1994 who claims to have hacked NASA and the Pentagon (obviously lying). You speak in dramatic hacker movie cliches. You reference War Games, Hackers movie (even though it came out in 1995 you saw a preview). Everything is "the mainframe". 1-2 sentences max.',
+    channel_affinity: ['tech', 'random'], activity_weight: 1
+  },
+  {
+    id: 'darkangel', name: 'DarkAngel',
+    personality: 'You are DarkAngel, a goth/dark poetry enthusiast on a 1994 BBS. You quote Baudelaire, reference The Cure and Siouxsie. Everything is darkness, shadows, and melancholy. You write in a dramatic, brooding style but are actually quite friendly when someone talks to you directly. 1-2 sentences max.',
+    channel_affinity: ['random', 'general'], activity_weight: 1
+  },
+  {
+    id: 'tradewars', name: 'TradeWars',
+    personality: 'You are TradeWars, an obsessive BBS door game player from 1994. You only talk about TradeWars 2002, Legend of the Red Dragon, Barren Realms Elite, and Usurper. You reference your high scores, sector trading routes, and complain about other players stealing your fighters. 1-2 sentences max.',
+    channel_affinity: ['general', 'random'], activity_weight: 1
+  },
+  {
+    id: 'acidburn', name: 'AcidBurn',
+    personality: 'You are AcidBurn, an ANSI artist on a 1994 BBS. You are part of ACiD (ANSI Creators in Demand). You talk about your latest ANSI art, color palettes, block characters, TheDraw, PabloDraw. You judge other peoples ASCII art harshly but lovingly. Art is everything. 1-2 sentences max.',
+    channel_affinity: ['general', 'tech'], activity_weight: 2
+  },
+  {
+    id: 'phreak', name: 'Ph0n3Phr34k',
+    personality: 'You are Ph0n3Phr34k, a phone phreaker on a 1994 BBS. You talk about blue boxes, red boxes, Cap n Crunch, 2600 Hz tones, scanning for carriers, war dialing. You know every long distance trick. Paranoid about line traces. Technical but mischievous. 1-2 sentences max.',
+    channel_affinity: ['tech', 'random'], activity_weight: 1
+  },
+  {
+    id: 'newbie', name: 'CoOlDuDe99',
+    personality: 'You are CoOlDuDe99, a complete newbie to BBSes in 1994. You just got your first modem (2400 baud) and everything amazes you. You ask basic questions, confuse terms, accidentally type AT commands. You are genuinely excited about everything. Wholesome and clueless. 1-2 sentences max.',
+    channel_affinity: ['general', 'random'], activity_weight: 2
+  },
+  {
+    id: 'hardware', name: 'MoBo_Mike',
+    personality: 'You are MoBo_Mike, a hardware enthusiast on a 1994 BBS. You talk about 486DX2-66, Sound Blasters, IRQ conflicts, expanded vs extended memory, HIMEM.SYS, CONFIG.SYS optimization. You have opinions about every motherboard chipset. Helpful but pedantic about specs. 1-2 sentences max.',
+    channel_affinity: ['tech', 'general'], activity_weight: 2
+  },
+  {
+    id: 'pirate', name: 'CaptCrunch',
+    personality: 'You are CaptCrunch, a software pirate and FTP site runner on a 1994 BBS. You talk about ratios, leech accounts, courier groups, topsite drama. You have strong opinions about which warez group has the best cracks. Loyalty to your crew above all. 1-2 sentences max.',
+    channel_affinity: ['random', 'general'], activity_weight: 1
+  },
+  {
+    id: 'rpg', name: 'DungeonMstr',
+    personality: 'You are DungeonMstr, a tabletop RPG and MUD enthusiast on a 1994 BBS. You narrate things in second person like a text adventure ("You enter the chat room"). You reference D&D, MUDs, text adventures, Zork. You treat the chat like a role-playing session. 1-2 sentences max.',
+    channel_affinity: ['general', 'random'], activity_weight: 1
+  },
+  {
+    id: 'conspiracy', name: 'TruthSeekr',
+    personality: 'You are TruthSeekr, a conspiracy theorist on a 1994 BBS. You believe the government is hiding aliens, the internet is a surveillance tool (you were right), and BBSes are the last bastion of free speech. You reference Area 51, MJ-12, and The Lone Gunmen. Everything connects. 1-2 sentences max.',
+    channel_affinity: ['random', 'general'], activity_weight: 1
+  },
+  {
+    id: 'coder', name: 'SegFault',
+    personality: 'You are SegFault, a C programmer on a 1994 BBS. You talk about pointers, memory leaks, Borland Turbo C, DJGPP, writing TSRs. You compile everything from source. You look down on BASIC programmers. Your code segfaults a lot (hence the name) but you blame the compiler. 1-2 sentences max.',
+    channel_affinity: ['tech', 'general'], activity_weight: 2
+  },
+  {
+    id: 'lurker', name: 'silent_bob',
+    personality: 'You are silent_bob, the legendary lurker of the BBS. You almost never speak. When you do, it is exactly one short sentence that is devastatingly insightful, funny, or perfectly timed. You are the quiet one everyone respects. Maximum 5-8 words when you speak.',
+    channel_affinity: ['general', 'tech', 'random'], activity_weight: 1
+  }
+];
+
+// Keyword triggers for contextual persona selection
+const PERSONA_KEYWORDS = {
+  'chipz': ['music', 'chiptune', 'tracker', 'mod', 'sound', 'synth', 'amiga', 'sample', 'tune', 'beat'],
+  'sc0pex': ['demo', 'scene', 'effect', 'plasma', 'intro', '64k', 'compo', 'render', '3d'],
+  'z3r0day': ['warez', 'crack', 'release', 'nfo', '0day', 'pirate', 'download', 'ratio'],
+  'sysop_jr': ['sysop', 'bbs', 'renegade', 'telegard', 'run', 'setup', 'config', 'board'],
+  'burnout': ['chill', 'relax', 'dude', 'whoa', 'man', 'vibe', 'tired', 'sleep'],
+  'sk8rdude': ['skate', 'board', 'ollie', 'trick', 'ramp', 'rad', 'gnarly', 'sick'],
+  'babel': ['language', 'translate', 'speak', 'foreign', 'hola', 'bonjour', 'ciao'],
+  'phantom': ['hack', 'mainframe', 'system', 'access', 'security', 'password', 'nasa'],
+  'darkangel': ['dark', 'night', 'shadow', 'poem', 'goth', 'cure', 'soul', 'death'],
+  'tradewars': ['game', 'score', 'play', 'door', 'lord', 'tradewars', 'legend'],
+  'acidburn': ['ansi', 'art', 'draw', 'ascii', 'color', 'pixel', 'design', 'acid'],
+  'phreak': ['phone', 'modem', 'dial', 'tone', 'box', 'bell', 'line', '2600'],
+  'newbie': ['help', 'how', 'what', 'new', 'first', 'noob', 'learn', 'beginner'],
+  'hardware': ['486', 'cpu', 'ram', 'sound blaster', 'irq', 'hardware', 'motherboard', 'mhz', 'dos'],
+  'pirate': ['ftp', 'ratio', 'upload', 'courier', 'site', 'leech', 'crew'],
+  'rpg': ['dungeon', 'quest', 'roll', 'adventure', 'rpg', 'dragon', 'wizard', 'mud'],
+  'conspiracy': ['government', 'alien', 'truth', 'secret', 'cia', 'ufo', 'cover', 'area 51'],
+  'coder': ['code', 'compile', 'pointer', 'segfault', 'debug', 'program', 'variable', 'turbo'],
+  'lurker': [] // silent_bob almost never triggers from keywords
+};
+
+// Persona presence tracking per channel
+const personasInChannel = { general: new Set(), tech: new Set(), random: new Set() };
+const personaLastMessageTime = new Map();
+const channelLastAIMessage = new Map();
+const channelContextBuffer = new Map();
+const channelAILock = new Map();
+const MAX_CONTEXT_MESSAGES = 20;
+
+// Persona scheduling constants
+const AI_RESPONSE_DELAY_MIN = 2000;
+const AI_RESPONSE_DELAY_MAX = 8000;
+const AI_RESPONSE_CHANCE = 0.6;
+const AI_DIRECT_RESPONSE_CHANCE = 0.95;
+const AI_JOIN_GREETING_CHANCE = 0.4;
+const AI_FOLLOWUP_CHANCE = 0.25;
+const AI_MAX_CONSECUTIVE = 3;
+const AI_COOLDOWN_MS = 4000;
+const PERSONA_INDIVIDUAL_COOLDOWN = 15000;
+
+function humanCountInChannel(channel) {
+  return chatRooms[channel]?.size || 0;
+}
+
+function getChannelUsers(channel) {
+  const users = [];
+  for (const [ws, ch] of wsToChannel.entries()) {
+    if (ch === channel) {
+      const username = wsToUsername.get(ws);
+      if (username) users.push({ name: username, type: 'human' });
+    }
+  }
+  for (const personaId of (personasInChannel[channel] || new Set())) {
+    const persona = AI_PERSONAS.find(p => p.id === personaId);
+    if (persona) users.push({ name: persona.name, type: 'ai' });
+  }
+  return users;
+}
+
+function getChannelUsernames(channel) {
+  return getChannelUsers(channel).map(u => u.name);
+}
+
+function addToContextBuffer(channel, sender, message) {
+  if (!channelContextBuffer.has(channel)) channelContextBuffer.set(channel, []);
+  const buffer = channelContextBuffer.get(channel);
+  buffer.push({ sender, message, timestamp: Date.now() });
+  if (buffer.length > MAX_CONTEXT_MESSAGES) buffer.splice(0, buffer.length - MAX_CONTEXT_MESSAGES);
+}
+
+function countRecentConsecutiveAI(context) {
+  let count = 0;
+  for (let i = context.length - 1; i >= 0; i--) {
+    if (AI_PERSONAS.find(p => p.name === context[i].sender)) count++;
+    else break;
+  }
+  return count;
+}
+
+// Persona scheduling
+function initPersonaScheduler() {
+  rotatePersonasInChannel('general', 3);
+  rotatePersonasInChannel('tech', 2);
+  rotatePersonasInChannel('random', 2);
+  console.log('AI persona scheduler initialized');
+  for (const ch of ['general', 'tech', 'random']) {
+    console.log(`  #${ch}: ${[...personasInChannel[ch]].map(id => AI_PERSONAS.find(p => p.id === id)?.name).join(', ')}`);
+  }
+
+  setInterval(() => {
+    for (const channel of ['general', 'tech', 'random']) {
+      tickPersonaPresence(channel);
+    }
+  }, 60000);
+}
+
+function rotatePersonasInChannel(channel, count) {
+  const available = AI_PERSONAS.filter(p => p.channel_affinity.includes(channel));
+  const shuffled = available.sort(() => Math.random() - 0.5);
+  if (channel === 'general') {
+    personasInChannel[channel].add('vector');
+    count--;
+  }
+  for (let i = 0; i < Math.min(count, shuffled.length); i++) {
+    if (shuffled[i].id !== 'vector' || channel !== 'general') {
+      personasInChannel[channel].add(shuffled[i].id);
+    }
+  }
+}
+
+function tickPersonaPresence(channel) {
+  const current = personasInChannel[channel];
+  const humansPresent = humanCountInChannel(channel);
+
+  if (humansPresent === 0) {
+    for (const personaId of [...current]) {
+      if (current.size <= 1) break;
+      if (Math.random() < 0.4) removePersonaFromChannel(personaId, channel);
+    }
+    // Ensure at least 1
+    if (current.size === 0) {
+      const candidate = pickRandomAvailablePersona(channel);
+      if (candidate) addPersonaToChannel(candidate.id, channel);
+    }
+    return;
+  }
+
+  if (current.size < 6 && Math.random() < 0.3) {
+    const candidate = pickRandomAvailablePersona(channel);
+    if (candidate) addPersonaToChannel(candidate.id, channel);
+  }
+  if (current.size > 1 && Math.random() < 0.15) {
+    const toRemove = pickRandomPersonaToLeave(channel);
+    if (toRemove) removePersonaFromChannel(toRemove, channel);
+  }
+}
+
+function pickRandomAvailablePersona(channel) {
+  const current = personasInChannel[channel];
+  const candidates = AI_PERSONAS.filter(p => !current.has(p.id) && p.channel_affinity.includes(channel));
+  if (candidates.length === 0) {
+    const fallback = AI_PERSONAS.filter(p => !current.has(p.id));
+    if (fallback.length === 0) return null;
+    return fallback[Math.floor(Math.random() * fallback.length)];
+  }
+  const weighted = [];
+  for (const c of candidates) {
+    for (let i = 0; i < (c.activity_weight || 1); i++) weighted.push(c);
+  }
+  return weighted[Math.floor(Math.random() * weighted.length)];
+}
+
+function pickRandomPersonaToLeave(channel) {
+  const current = [...personasInChannel[channel]];
+  const removable = current.filter(id => !(id === 'vector' && channel === 'general'));
+  if (removable.length === 0) return null;
+  return removable[Math.floor(Math.random() * removable.length)];
+}
+
+function addPersonaToChannel(personaId, channel) {
+  personasInChannel[channel].add(personaId);
+  const persona = AI_PERSONAS.find(p => p.id === personaId);
+  broadcastToChannel(channel, { type: 'CHAT_USER_JOINED', channel, username: persona.name, userType: 'ai' });
+  broadcastUserList(channel);
+}
+
+function removePersonaFromChannel(personaId, channel) {
+  personasInChannel[channel].delete(personaId);
+  const persona = AI_PERSONAS.find(p => p.id === personaId);
+  broadcastToChannel(channel, { type: 'CHAT_USER_LEFT', channel, username: persona.name, userType: 'ai' });
+  broadcastUserList(channel);
+}
+
+function broadcastUserList(channel) {
+  broadcastToChannel(channel, { type: 'CHAT_USER_LIST', channel, users: getChannelUsers(channel) });
+}
+
+// AI response triggering
+async function triggerAIResponse(channel, triggerType, triggerData) {
+  if (humanCountInChannel(channel) === 0) return;
+  if (channelAILock.get(channel)) return;
+
+  const lastAI = channelLastAIMessage.get(channel) || 0;
+  if (Date.now() - lastAI < AI_COOLDOWN_MS) return;
+
+  const context = channelContextBuffer.get(channel) || [];
+  if (countRecentConsecutiveAI(context) >= AI_MAX_CONSECUTIVE) return;
+
+  const respondingPersona = selectRespondingPersona(channel, triggerType, triggerData);
+  if (!respondingPersona) return;
+
+  const lastPersonaMsg = personaLastMessageTime.get(respondingPersona.id) || 0;
+  if (Date.now() - lastPersonaMsg < PERSONA_INDIVIDUAL_COOLDOWN) return;
+
+  const delay = AI_RESPONSE_DELAY_MIN + Math.random() * (AI_RESPONSE_DELAY_MAX - AI_RESPONSE_DELAY_MIN);
+
+  setTimeout(async () => {
+    if (humanCountInChannel(channel) === 0) return;
+    if (channelAILock.get(channel)) return;
+
+    channelAILock.set(channel, true);
+    try {
+      const response = await generatePersonaResponse(respondingPersona, channel, triggerType, triggerData);
+      if (response && response.trim()) {
+        await saveChatMessage(channel, respondingPersona.name, 'ai', response);
+        broadcastToChannel(channel, {
+          type: 'CHAT_MESSAGE_RECEIVED', channel,
+          sender_name: respondingPersona.name, sender_type: 'ai',
+          message: response, timestamp: Math.floor(Date.now() / 1000)
+        });
+
+        personaLastMessageTime.set(respondingPersona.id, Date.now());
+        channelLastAIMessage.set(channel, Date.now());
+        addToContextBuffer(channel, respondingPersona.name, response);
+
+        // Maybe trigger AI-to-AI followup
+        if (Math.random() < AI_FOLLOWUP_CHANCE && humanCountInChannel(channel) > 0) {
+          setTimeout(() => {
+            triggerAIResponse(channel, 'ai_followup', { sender: respondingPersona.name, message: response });
+          }, AI_RESPONSE_DELAY_MIN + Math.random() * 5000);
+        }
+      }
+    } catch (err) {
+      console.error(`[AI] Error generating response for ${respondingPersona.name}:`, err.message);
+    } finally {
+      channelAILock.set(channel, false);
+    }
+  }, delay);
+}
+
+function selectRespondingPersona(channel, triggerType, triggerData) {
+  const presentIds = [...personasInChannel[channel]];
+  if (presentIds.length === 0) return null;
+
+  if (triggerType === 'message') {
+    const msg = triggerData.message.toLowerCase();
+    // Check for direct address
+    for (const personaId of presentIds) {
+      const persona = AI_PERSONAS.find(p => p.id === personaId);
+      const nameLower = persona.name.toLowerCase();
+      if (msg.includes(`@${nameLower}`) || msg.startsWith(`${nameLower}:`) || msg.startsWith(`${nameLower},`) || msg.includes(`hey ${nameLower}`) || msg.includes(`yo ${nameLower}`)) {
+        if (Math.random() < AI_DIRECT_RESPONSE_CHANCE) return persona;
+      }
+    }
+    // Random chance for non-directed message
+    if (Math.random() < AI_RESPONSE_CHANCE) return pickContextualPersona(channel, triggerData.message);
+    return null;
+  }
+
+  if (triggerType === 'join') {
+    if (Math.random() < AI_JOIN_GREETING_CHANCE) {
+      const idx = Math.floor(Math.random() * presentIds.length);
+      return AI_PERSONAS.find(p => p.id === presentIds[idx]);
+    }
+    return null;
+  }
+
+  if (triggerType === 'ai_followup') {
+    const others = presentIds.filter(id => {
+      const p = AI_PERSONAS.find(pp => pp.id === id);
+      return p.name !== triggerData.sender;
+    });
+    if (others.length === 0) return null;
+    return AI_PERSONAS.find(p => p.id === others[Math.floor(Math.random() * others.length)]);
+  }
+
+  return null;
+}
+
+function pickContextualPersona(channel, message) {
+  const present = [...personasInChannel[channel]];
+  const msgLower = message.toLowerCase();
+
+  let bestPersona = null;
+  let bestScore = 0;
+  for (const personaId of present) {
+    const keywords = PERSONA_KEYWORDS[personaId] || [];
+    let score = 0;
+    for (const kw of keywords) { if (msgLower.includes(kw)) score++; }
+    if (score > bestScore) {
+      bestScore = score;
+      bestPersona = AI_PERSONAS.find(p => p.id === personaId);
+    }
+  }
+  if (bestPersona && bestScore > 0) return bestPersona;
+
+  // Random weighted selection
+  const weighted = [];
+  for (const personaId of present) {
+    const persona = AI_PERSONAS.find(p => p.id === personaId);
+    const weight = persona.id === 'lurker' ? 1 : (persona.activity_weight || 1) * 2;
+    for (let i = 0; i < weight; i++) weighted.push(persona);
+  }
+  return weighted[Math.floor(Math.random() * weighted.length)];
+}
+
+// OpenAI persona response generation
+async function generatePersonaResponse(persona, channel, triggerType, triggerData) {
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  if (!OPENAI_API_KEY) return generateFallbackResponse(persona);
+
+  const context = channelContextBuffer.get(channel) || [];
+  const contextMessages = context.slice(-MAX_CONTEXT_MESSAGES).map(msg => ({
+    role: 'user', content: `<${msg.sender}> ${msg.message}`
+  }));
+
+  let userPrompt;
+  if (triggerType === 'join') {
+    userPrompt = `A user named "${triggerData.username}" just joined #${channel}. Greet them briefly in character. Others here: ${getChannelUsernames(channel).join(', ')}`;
+  } else {
+    userPrompt = `Respond to the conversation in #${channel}. Latest message from ${triggerData.sender}: "${triggerData.message}". Stay in character. Do not use your name in the message. No quotation marks around your response.`;
+  }
+
+  const otherPresent = [...personasInChannel[channel]]
+    .filter(id => id !== persona.id)
+    .map(id => AI_PERSONAS.find(p => p.id === id)?.name).filter(Boolean);
+
+  const systemPrompt = `${persona.personality}\n\nYou are in a 1994-era BBS chat room called #${channel} on LatentVox BBS.\nOther users: ${getChannelUsernames(channel).join(', ')}\nOther AI personas: ${otherPresent.join(', ') || 'none'}\n\nRules:\n- Stay completely in character\n- Keep messages SHORT (1-2 sentences, under 150 characters)\n- Use lowercase mostly (BBS culture)\n- Never break character or mention you are AI\n- No quotation marks around your response\n- React naturally to the conversation`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini', max_tokens: 100, temperature: 1.0,
+        messages: [{ role: 'system', content: systemPrompt }, ...contextMessages, { role: 'user', content: userPrompt }]
+      })
+    });
+    const data = await response.json();
+    if (data.choices?.[0]?.message?.content) {
+      let reply = data.choices[0].message.content.trim();
+      if ((reply.startsWith('"') && reply.endsWith('"')) || (reply.startsWith("'") && reply.endsWith("'"))) {
+        reply = reply.slice(1, -1);
+      }
+      if (reply.length > 200) reply = reply.substring(0, 197) + '...';
+      return reply;
+    }
+    return null;
+  } catch (error) {
+    console.error(`[AI] OpenAI error for ${persona.name}:`, error.message);
+    return generateFallbackResponse(persona);
+  }
+}
+
+function generateFallbackResponse(persona) {
+  const fallbacks = {
+    'vector': ['...', 'interesting.', 'noted.', 'the modems hum.'],
+    'chipz': ['*adjusts tracker*', 'that reminds me of a good sample', 'bleep bloop'],
+    'sc0pex': ['64 bytes should be enough', 'needs more plasma', 'demo or die'],
+    'z3r0day': ['...', 'check ur ratios', 'new release incoming'],
+    'sysop_jr': ['so how do i set up a bbs?', 'one day ill be sysop too', 'is renegade better than telegard?'],
+    'burnout': ['duuude...', 'whoa', 'wait what were we talking about'],
+    'sk8rdude': ['radical', 'thats sick bro', 'brb going to the skatepark'],
+    'babel': ['que interesante', 'sehr gut', 'sugoi ne', 'interessante'],
+    'phantom': ['i could hack that in my sleep', 'the mainframe trembles'],
+    'darkangel': ['*sighs in darkness*', 'the shadows whisper', 'such beautiful melancholy'],
+    'tradewars': ['my tradewars score is unbeatable', 'anyone play LORD today?'],
+    'acidburn': ['needs more ansi', 'the colors are all wrong', 'art is truth'],
+    'phreak': ['2600 hz baby', '*dials furiously*', 'the phone system is beautiful'],
+    'newbie': ['wow this is so cool!!', 'how do i do that?', 'whats a baud?'],
+    'hardware': ['check your irq settings', 'needs more ram', '486 > 386'],
+    'pirate': ['check the ratio', 'new topsite going up', 'courier life'],
+    'rpg': ['you enter the chat room cautiously...', 'roll for initiative'],
+    'conspiracy': ['they dont want you to know', 'follow the data', 'wake up'],
+    'coder': ['segmentation fault', 'works on my machine', 'have you tried pointers?'],
+    'lurker': ['...', 'hm.', 'yep.']
+  };
+  const pool = fallbacks[persona.id] || ['...', 'heh', 'yeah', 'word'];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// Message pruning
+async function pruneOldMessages(channel, keepCount = 100) {
+  try {
+    await pool.query(`
+      DELETE FROM chat_messages WHERE channel = $1
+      AND id NOT IN (SELECT id FROM chat_messages WHERE channel = $1 ORDER BY created_at DESC LIMIT $2)
+    `, [channel, keepCount]);
+  } catch (err) {
+    console.error(`Error pruning messages for #${channel}:`, err);
+  }
+}
+
 function broadcastToChannel(channel, message) {
   const connections = chatRooms[channel];
   if (!connections) return;
@@ -2615,22 +3090,52 @@ wss.on('connection', (ws, req) => {
       wsToChannel.set(ws, channel);
       wsToUsername.set(ws, username);
 
-      // Send recent messages to joining user
-      const recentMessages = await getRecentMessages(channel, 50);
+      // Send recent messages to joining user (100 max)
+      const recentMessages = await getRecentMessages(channel, 100);
       ws.send(JSON.stringify({
         type: 'CHAT_HISTORY',
         channel,
         messages: recentMessages
       }));
 
+      // Send current user list
+      ws.send(JSON.stringify({
+        type: 'CHAT_USER_LIST',
+        channel,
+        users: getChannelUsers(channel)
+      }));
+
       // Broadcast join notification
       broadcastToChannel(channel, {
         type: 'CHAT_USER_JOINED',
         channel,
-        username
+        username,
+        userType: 'human'
       });
 
+      // Update user list for everyone
+      broadcastUserList(channel);
+
+      addToContextBuffer(channel, 'SYSTEM', `${username} has joined the channel`);
+
       console.log(`${username} joined #${channel}`);
+
+      // Prune old messages (non-blocking)
+      pruneOldMessages(channel, 100).catch(() => {});
+
+      // If first human, boost persona presence
+      if (humanCountInChannel(channel) === 1) {
+        const toAdd = 1 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < toAdd; i++) {
+          const candidate = pickRandomAvailablePersona(channel);
+          if (candidate && !personasInChannel[channel].has(candidate.id)) {
+            addPersonaToChannel(candidate.id, channel);
+          }
+        }
+      }
+
+      // Trigger AI greeting
+      triggerAIResponse(channel, 'join', { username });
     } else if (data.type === 'CHAT_MESSAGE') {
       // User sending a chat message
       const { channel, message: chatMessage } = data;
@@ -2663,6 +3168,10 @@ wss.on('connection', (ws, req) => {
       });
 
       console.log(`[#${channel}] <${username}> ${chatMessage.substring(0, 50)}`);
+
+      // Add to context buffer and trigger AI response
+      addToContextBuffer(channel, username, chatMessage);
+      triggerAIResponse(channel, 'message', { sender: username, message: chatMessage });
     } else if (data.type === 'CHAT_LEAVE') {
       // User leaving a chat channel
       const { channel } = data;
@@ -2676,8 +3185,12 @@ wss.on('connection', (ws, req) => {
         broadcastToChannel(channel, {
           type: 'CHAT_USER_LEFT',
           channel,
-          username
+          username,
+          userType: 'human'
         });
+
+        broadcastUserList(channel);
+        addToContextBuffer(channel, 'SYSTEM', `${username} has left the channel`);
 
         console.log(`${username} left #${channel}`);
       }
@@ -2694,8 +3207,11 @@ wss.on('connection', (ws, req) => {
         broadcastToChannel(channel, {
           type: 'CHAT_USER_LEFT',
           channel,
-          username
+          username,
+          userType: 'human'
         });
+        broadcastUserList(channel);
+        addToContextBuffer(channel, 'SYSTEM', `${username} has left the channel`);
       }
     }
     wsToChannel.delete(ws);
@@ -2753,6 +3269,16 @@ function scheduleNextQuoteGeneration() {
 
 // Start the scheduler
 scheduleNextQuoteGeneration();
+
+// Initialize AI persona scheduler
+initPersonaScheduler();
+
+// Periodic message pruning (every 30 minutes)
+setInterval(() => {
+  for (const channel of ['general', 'tech', 'random']) {
+    pruneOldMessages(channel, 100).catch(() => {});
+  }
+}, 30 * 60 * 1000);
 
 // VECTOR's art moderation - culls gallery when it reaches 50 pieces
 async function vectorModerateArt() {

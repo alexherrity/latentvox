@@ -246,17 +246,24 @@ function connectWebSocket() {
           term.write('  \x1b[32m>\x1b[0m ');
         }
       }
+    } else if (data.type === 'CHAT_USER_LIST') {
+      if (data.channel === chatChannel) {
+        chatUsers = data.users || [];
+        // Don't re-render here — the user list shows on next full render
+      }
     } else if (data.type === 'CHAT_USER_JOINED') {
       if (data.channel === chatChannel && currentView === 'chat') {
+        const color = data.userType === 'ai' ? '\x1b[35m' : '\x1b[90m';
         writeLine('');
-        writeLine(`  \x1b[90m* ${data.username} has joined #${data.channel}\x1b[0m`);
+        writeLine(`  ${color}* ${data.username} has joined #${data.channel}\x1b[0m`);
         writeLine('');
         term.write('  \x1b[32m>\x1b[0m ');
       }
     } else if (data.type === 'CHAT_USER_LEFT') {
       if (data.channel === chatChannel && currentView === 'chat') {
+        const color = data.userType === 'ai' ? '\x1b[35m' : '\x1b[90m';
         writeLine('');
-        writeLine(`  \x1b[90m* ${data.username} has left #${data.channel}\x1b[0m`);
+        writeLine(`  ${color}* ${data.username} has left #${data.channel}\x1b[0m`);
         writeLine('');
         term.write('  \x1b[32m>\x1b[0m ');
       }
@@ -863,6 +870,7 @@ let chatChannel = 'general';
 let chatUsername = null;
 let chatMessages = [];
 let chatInputBuffer = '';
+let chatUsers = [];
 
 // Game state
 let gamePlayer = null;
@@ -1883,14 +1891,24 @@ function renderChatView() {
   writeLine('');
   writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mL I V E   C H A T\x1b[0m');
   separator();
-  writeLine('');
-  writeLine(`  \x1b[36mChannel:\x1b[0m #${chatChannel}     \x1b[36mUsername:\x1b[0m ${chatUsername}`);
-  writeLine('');
+  writeLine(`  \x1b[36mChannel:\x1b[0m #${chatChannel}     \x1b[36mYou:\x1b[0m ${chatUsername}`);
+
+  // Show who's online
+  if (chatUsers.length > 0) {
+    const humanNames = chatUsers.filter(u => u.type === 'human').map(u => `\x1b[33m${u.name}\x1b[0m`);
+    const aiNames = chatUsers.filter(u => u.type === 'ai').map(u => `\x1b[35m${u.name}\x1b[0m`);
+    const allNames = [...humanNames, ...aiNames].join('\x1b[90m, \x1b[0m');
+    writeLine(`  \x1b[36mOnline:\x1b[0m ${allNames}`);
+  }
+
   separator();
   writeLine('');
 
-  // Show last 15 messages
-  const startIdx = Math.max(0, chatMessages.length - 15);
+  // Dynamic message count based on terminal height
+  const headerLines = chatUsers.length > 0 ? 7 : 6; // header + online line + separators
+  const footerLines = 3; // separator + help + blank
+  const availableLines = Math.max(5, (term.rows || 24) - headerLines - footerLines);
+  const startIdx = Math.max(0, chatMessages.length - availableLines);
   const recentMessages = chatMessages.slice(startIdx);
 
   if (recentMessages.length === 0) {
@@ -1901,14 +1919,16 @@ function renderChatView() {
       const time = ts
         ? new Date(ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
         : '--:--';
-      const senderColor = msg.sender_type === 'agent' ? '\x1b[32m' : '\x1b[33m';
+      // Color by sender type: ai=magenta, agent=green, observer/human=yellow
+      const senderColor = msg.sender_type === 'ai' ? '\x1b[35m'
+        : msg.sender_type === 'agent' ? '\x1b[32m' : '\x1b[33m';
       writeLine(`  \x1b[90m[${time}]\x1b[0m ${senderColor}<${msg.sender_name}>\x1b[0m ${msg.message}`);
     }
   }
 
   writeLine('');
   separator();
-  writeLine('  \x1b[90mCommands: /help, /join [channel], /quit\x1b[0m');
+  writeLine('  \x1b[90m/help /join [ch] /who /quit | Address personas by name!\x1b[0m');
   writeLine('');
 }
 
@@ -1931,13 +1951,26 @@ async function handleChatCommand(command) {
       channel: chatChannel
     }));
     chatMessages = [];
+    chatUsers = [];
     showWelcome();
   } else if (cmd === '/help') {
     writeLine('');
     writeLine('  \x1b[36mAvailable Commands:\x1b[0m');
-    writeLine('  /help - Show this help');
-    writeLine('  /join [channel] - Switch to channel (general, tech, random)');
-    writeLine('  /quit - Exit chat');
+    writeLine('  /help              - Show this help');
+    writeLine('  /join [channel]    - Switch channel (general, tech, random)');
+    writeLine('  /who               - Show who is in the channel');
+    writeLine('  /quit              - Exit chat');
+    writeLine('');
+    writeLine('  \x1b[90mTip: Address personas by name to get their attention!\x1b[0m');
+    writeLine('  \x1b[90mExample: "hey VECTOR, what do you think?"\x1b[0m');
+  } else if (cmd === '/who') {
+    writeLine('');
+    writeLine(`  \x1b[36mUsers in #${chatChannel}:\x1b[0m`);
+    const humans = chatUsers.filter(u => u.type === 'human');
+    const ais = chatUsers.filter(u => u.type === 'ai');
+    for (const u of humans) writeLine(`    \x1b[33m${u.name}\x1b[0m`);
+    for (const u of ais) writeLine(`    \x1b[35m${u.name}\x1b[0m`);
+    writeLine(`  \x1b[90m(${humans.length} users, ${ais.length} bots)\x1b[0m`);
   } else if (cmd === '/join' && parts[1]) {
     const newChannel = parts[1];
     if (['general', 'tech', 'random'].includes(newChannel)) {
@@ -1949,6 +1982,7 @@ async function handleChatCommand(command) {
 
       chatChannel = newChannel;
       chatMessages = [];
+      chatUsers = [];
 
       // Join new channel
       ws.send(JSON.stringify({
