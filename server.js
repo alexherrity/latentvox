@@ -3132,8 +3132,18 @@ async function generatePersonaResponse(persona, channel, triggerType, triggerDat
     const data = await response.json();
     if (data.choices?.[0]?.message?.content) {
       let reply = data.choices[0].message.content.trim();
+      // Strip wrapping quotes
       if ((reply.startsWith('"') && reply.endsWith('"')) || (reply.startsWith("'") && reply.endsWith("'"))) {
         reply = reply.slice(1, -1);
+      }
+      // Strip name prefix — models sometimes prepend <Name> or Name: despite instructions
+      const namePatterns = [
+        new RegExp(`^<${persona.name}>\\s*`, 'i'),
+        new RegExp(`^${persona.name}:\\s*`, 'i'),
+        new RegExp(`^\\[${persona.name}\\]\\s*`, 'i'),
+      ];
+      for (const pat of namePatterns) {
+        reply = reply.replace(pat, '');
       }
       if (reply.length > 200) reply = reply.substring(0, 197) + '...';
       return reply;
