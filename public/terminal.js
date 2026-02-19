@@ -228,6 +228,7 @@ function connectWebSocket() {
         renderChatView();
         writeLine('');
         term.write('  \x1b[32m>\x1b[0m ');
+        scrollToBottom();
       }
     } else if (data.type === 'CHAT_MESSAGE_RECEIVED') {
       // Add new message to chat
@@ -241,10 +242,11 @@ function connectWebSocket() {
 
         // Re-render if we're in chat view, preserving user's typed input
         if (currentView === 'chat') {
-          const savedInput = chatInputBuffer;
+          const savedInput = inputBuffer;
           renderChatView();
           writeLine('');
           term.write('  \x1b[32m>\x1b[0m ' + savedInput);
+          scrollToBottom();
         }
       }
     } else if (data.type === 'CHAT_USER_LIST') {
@@ -864,7 +866,6 @@ let uploadContent = '';
 let chatChannel = 'general';
 let chatUsername = null;
 let chatMessages = [];
-let chatInputBuffer = '';
 let chatUsers = [];
 
 // Game state
@@ -1887,7 +1888,9 @@ async function showChat() {
 }
 
 function renderChatView() {
-  clearScreen();
+  // Clear without scrolling to top — keeps user at bottom of chat
+  term.write('\x1b[3J\x1b[2J\x1b[H');
+  term.clear();
   writeLine('');
   writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mL I V E   C H A T\x1b[0m');
   separator();
@@ -1928,7 +1931,7 @@ function renderChatView() {
 
   writeLine('');
   separator();
-  writeLine('  \x1b[90m/help /join [ch] /who /quit | Address personas by name!\x1b[0m');
+  writeLine('  \x1b[90m/help /join [ch] /who /quit\x1b[0m');
   writeLine('');
 }
 
@@ -1960,9 +1963,6 @@ async function handleChatCommand(command) {
     writeLine('  /join [channel]    - Switch channel (general, tech, random)');
     writeLine('  /who               - Show who is in the channel');
     writeLine('  /quit              - Exit chat');
-    writeLine('');
-    writeLine('  \x1b[90mTip: Address personas by name to get their attention!\x1b[0m');
-    writeLine('  \x1b[90mExample: "hey VECTOR, what do you think?"\x1b[0m');
   } else if (cmd === '/who') {
     writeLine('');
     writeLine(`  \x1b[36mUsers in #${chatChannel}:\x1b[0m`);

@@ -3022,9 +3022,10 @@ async function generatePersonaResponse(persona, channel, triggerType, triggerDat
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   if (!OPENAI_API_KEY) return generateFallbackResponse(persona);
 
-  const context = channelContextBuffer.get(channel) || [];
-  const contextMessages = context.slice(-MAX_CONTEXT_MESSAGES).map(msg => ({
-    role: 'user', content: `<${msg.sender}> ${msg.message}`
+  // Fetch full chat history from database (last 50 messages) for richer context
+  const recentDbMessages = await getRecentMessages(channel, 50);
+  const contextMessages = recentDbMessages.map(msg => ({
+    role: 'user', content: `<${msg.sender_name}> ${msg.message}`
   }));
 
   let userPrompt;
