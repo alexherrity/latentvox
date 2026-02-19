@@ -118,6 +118,7 @@ document.fonts.ready.then(() => {
 // Terminal ready state — gate rendering until DOM is painted
 let terminalReady = false;
 let pendingWelcome = null;
+let renderInProgress = false;
 
 // Final fit after first paint
 requestAnimationFrame(() => {
@@ -735,6 +736,9 @@ async function apiCall(endpoint, options = {}) {
 
 // Screens
 async function showWelcome() {
+  if (renderInProgress) return;
+  renderInProgress = true;
+
   clearScreen();
 
   // Show combined splash + main menu immediately
@@ -743,6 +747,7 @@ async function showWelcome() {
 
   writeLine('');
   term.write('  \x1b[33m>\x1b[0m ');
+  renderInProgress = false;
 }
 
 async function showMainMenu() {
