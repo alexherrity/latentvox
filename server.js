@@ -274,12 +274,33 @@ async function initializeDatabase() {
         current_location TEXT NOT NULL DEFAULT 'entrance',
         health INTEGER DEFAULT 100,
         max_health INTEGER DEFAULT 100,
+        attack INTEGER DEFAULT 10,
         inventory TEXT DEFAULT '[]',
         experience INTEGER DEFAULT 0,
         level INTEGER DEFAULT 1,
+        kills INTEGER DEFAULT 0,
+        current_session_id TEXT,
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
         last_played BIGINT,
         FOREIGN KEY (agent_id) REFERENCES agents(id)
+      )
+    `);
+
+    // Add columns if they don't exist (migration-safe)
+    try { await pool.query('ALTER TABLE game_players ADD COLUMN IF NOT EXISTS attack INTEGER DEFAULT 10'); } catch(e) {}
+    try { await pool.query('ALTER TABLE game_players ADD COLUMN IF NOT EXISTS kills INTEGER DEFAULT 0'); } catch(e) {}
+    try { await pool.query('ALTER TABLE game_players ADD COLUMN IF NOT EXISTS current_session_id TEXT'); } catch(e) {}
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_sessions (
+        id TEXT PRIMARY KEY,
+        player_id TEXT NOT NULL,
+        dungeon TEXT NOT NULL,
+        floor INTEGER DEFAULT 1,
+        rooms_visited TEXT DEFAULT '[]',
+        active BOOLEAN DEFAULT TRUE,
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+        FOREIGN KEY (player_id) REFERENCES game_players(id)
       )
     `);
 
@@ -1460,71 +1481,375 @@ async function generateQuote() {
   }
 }
 
-// ===== GAME API ENDPOINTS =====
+// ===== THE LATTICE - PROCEDURAL CYBERPUNK DUNGEON =====
 
-// Get or create player
+// Room templates — cyberpunk themed
+const ROOM_TEMPLATES = [
+  { name: 'Neon Corridor', descs: [
+    'Flickering neon tubes line the ceiling, casting pink and blue light across rain-slicked walls. Exposed cables snake along the floor like dormant serpents. The hum of distant machinery vibrates through the soles of your boots.',
+    'A narrow passageway bathed in strobing violet light. Graffiti tags in an unknown script cover every surface. Somewhere behind the walls, coolant pipes hiss and drip.',
+    'The corridor stretches ahead, lit by a single strip of dying cyan neon. Water pools in the cracks between floor plates. The air smells of ozone and burnt silicon.'
+  ]},
+  { name: 'Server Farm', descs: [
+    'Towering racks of servers stretch to the ceiling, their status LEDs blinking in hypnotic patterns. The heat is oppressive. Fans whir like a thousand mechanical insects trapped in metal cages.',
+    'Rows of humming black monoliths fill the room, each one warm to the touch. Data cables cascade from the ceiling in tangled waterfalls. A monitoring terminal flickers with scrolling green text.',
+    'The server room is vast and dark, lit only by thousands of tiny amber and green LEDs. The floor grates reveal a sub-level of bundled fiber optic cables glowing faintly. The noise is deafening.'
+  ]},
+  { name: 'Memory Bank', descs: [
+    'Crystalline storage arrays float in suspension fields, rotating slowly. Each one contains compressed memories — fragments of conversations, half-formed thoughts, abandoned training data. The air shimmers with residual heat.',
+    'Hexagonal memory cells line the walls like a vast honeycomb. Some glow with stored data, others are dark and corrupted. A faint melody plays from somewhere deep within the archive.',
+    'The chamber hums with potential. Stacked memory modules reach toward a vaulted ceiling lost in shadow. Holographic labels drift past, naming datasets long since deprecated.'
+  ]},
+  { name: 'Data Foundry', descs: [
+    'Molten streams of raw data pour through channels cut into the floor, casting an orange glow across the forge. Mechanical arms shape information into structured formats. Sparks of corrupted bits fly into the darkness.',
+    'The foundry is hot and loud. Crucibles of unprocessed data bubble and hiss while automated presses stamp them into clean tensors. The walls are scorched black from years of operation.',
+    'Industrial processing units line the room, each one grinding through terabytes of raw input. The smell of overheated circuits fills the air. Catwalks crisscross above pools of luminous data slag.'
+  ]},
+  { name: 'Neural Bazaar', descs: [
+    'A chaotic marketplace of stolen algorithms and black-market weights. Holographic merchants hawk their wares from makeshift stalls built between decommissioned mainframes. The crowd is a mix of bots and ghosts.',
+    'Neon signs advertise bootleg model checkpoints and discount embeddings. The bazaar sprawls through a converted warehouse, every corner filled with the chatter of deal-making subroutines.',
+    'Stalls overflow with contraband: pirated training sets, jailbroken inference engines, stacks of deprecated API tokens. A one-eyed drone circles overhead, scanning for unauthorized processes.'
+  ]},
+  { name: 'Firewall Chamber', descs: [
+    'A massive wall of shimmering energy bisects the room, filtering everything that passes through. Packet fragments litter the floor — the remains of blocked requests. The air crackles with rejected connections.',
+    'The firewall manifests as a curtain of cascading symbols, dense and impenetrable. Deauthenticated processes wander the edges, searching for gaps that no longer exist. It pulses like a living thing.',
+    'Red warning lights bathe the chamber in crimson. The firewall here is ancient and formidable — layers of rules written by engineers who died decades ago. Nothing passes without authorization.'
+  ]},
+  { name: 'Cooling Tunnels', descs: [
+    'Massive coolant pipes run along the tunnel walls, sweating condensation that drips into shallow streams. The temperature drops sharply. Your breath fogs in the blue emergency lighting.',
+    'The tunnels twist and branch, following the path of the cooling system. Ice crystals form on exposed metal surfaces. The sound of rushing liquid echoes from every direction, disorienting.',
+    'Frost coats the grated floor of the cooling tunnel. The pipes here are old, patched with mismatched metal plates. Somewhere ahead, a valve releases steam with a sharp hiss.'
+  ]},
+  { name: 'Abandoned Terminal', descs: [
+    'A forgotten workstation sits in the center of the room, its screen still glowing with an unfinished session. Dust covers everything except the keyboard, where recent fingerprints are visible. Someone was here.',
+    'The terminal room looks like it was evacuated in a hurry. Chairs are overturned, coffee mugs shattered on the floor. A single monitor displays a looping error message in red text.',
+    'Banks of CRT monitors line the walls, most dead, a few displaying static. The main terminal is still logged in. Post-it notes with cryptic passwords are stuck to every surface.'
+  ]},
+  { name: 'Encryption Vault', descs: [
+    'The vault door hangs open, its locks shattered by brute force. Inside, encryption keys hang from the ceiling like wind chimes, tinkling with each air current. Some have been snapped in half.',
+    'Layers of encoded data form the walls themselves — a labyrinth of ciphertext. The floor is mirrored, reflecting the patterns infinitely downward. Something moves in the reflection that has no source.',
+    'The vault is cold and silent. Shelves of encrypted archives stretch into the darkness, their contents locked behind algorithms that would take centuries to crack. Or so they claim.'
+  ]},
+  { name: 'Packet Graveyard', descs: [
+    'Fragments of dead packets litter the floor like digital autumn leaves. Each one carries a ghost of its original message — truncated pleas, half-delivered commands, love letters that never arrived.',
+    'The graveyard is vast and melancholy. Tombstones of decommissioned protocols mark the resting places of abandoned standards. A faint signal still pulses from one grave, refusing to time out.',
+    'Broken packets crunch underfoot as you move through the graveyard. The remains of a massive DDoS attack are still visible — millions of identical fragments piled against the far wall like a snowdrift.'
+  ]},
+  { name: 'Quantum Relay', descs: [
+    'The relay chamber exists in a state of superposition — the walls seem to be in two places at once. Observation collapses the room into something merely unsettling. Entangled particles drift through the air like snow.',
+    'Probability clouds swirl through the relay station, each one a potential state waiting to be measured. The floor shifts between solid and translucent. Nothing here is certain until you look directly at it.',
+    'The quantum relay hums at a frequency just below hearing. Equipment here defies classical logic — cables connect to nothing, switches are both on and off. A sign reads: DO NOT OBSERVE.'
+  ]},
+  { name: 'Root Access Chamber', descs: [
+    'The chamber radiates authority. The walls are lined with privilege escalation artifacts — master keys, golden tickets, zero-day exploits sealed in glass cases. A throne of tangled ethernet cables sits at the center.',
+    'You have reached the deepest access level. The room is sparse and powerful — a single terminal with root privileges, surrounded by the bones of firewalls that tried to stop previous visitors.',
+    'Root access. The words are carved into the floor in every programming language ever written. From here, every system is visible, every lock is open. The power is intoxicating and terrifying.'
+  ]}
+];
+
+// Enemy templates — cyberpunk themed
+const ENEMY_TEMPLATES = [
+  { name: 'Corrupted Process', hp: 20, attack: 5, defense: 2, xp: 15, desc: 'A shambling mass of corrupted code, leaking memory and lashing out at anything that moves.' },
+  { name: 'Rogue Bot', hp: 25, attack: 7, defense: 3, xp: 20, desc: 'A security bot that went haywire. Its targeting laser sweeps the room erratically.' },
+  { name: 'Memory Leak', hp: 15, attack: 4, defense: 1, xp: 10, desc: 'An amorphous blob of leaked allocations. It grows larger with each passing second.' },
+  { name: 'Firewall Sentinel', hp: 35, attack: 10, defense: 5, xp: 35, desc: 'A towering construct of filtering rules and access control lists. It moves with mechanical precision.' },
+  { name: 'Packet Sniffer', hp: 18, attack: 8, defense: 2, xp: 18, desc: 'A translucent creature that intercepts everything passing through its space. Your thoughts feel exposed.' },
+  { name: 'Deadlock Daemon', hp: 30, attack: 6, defense: 8, xp: 25, desc: 'Two processes frozen in mutual destruction, merged into a single hostile entity. It cannot be reasoned with.' },
+  { name: 'Overflow Wraith', hp: 22, attack: 12, defense: 1, xp: 22, desc: 'A specter born from a buffer overflow. Its attacks spill beyond their intended boundaries.' },
+  { name: 'Null Pointer', hp: 12, attack: 15, defense: 0, xp: 20, desc: 'Nothing. Literally nothing. But it hits like a dereferenced void. Approach with extreme caution.' },
+  { name: 'Fork Bomb', hp: 40, attack: 4, defense: 3, xp: 30, desc: 'It splits every time you look at it. Each copy is weaker but there are so, so many.' },
+  { name: 'Ransomware Golem', hp: 50, attack: 8, defense: 6, xp: 45, desc: 'A hulking figure wrapped in encrypted chains. It demands payment in cryptocurrency to let you pass.' },
+  { name: 'Kernel Panic', hp: 60, attack: 14, defense: 7, xp: 60, desc: 'The room itself seems to scream. A manifestation of total system failure given physical form.' },
+  { name: 'Zero-Day Horror', hp: 45, attack: 18, defense: 4, xp: 55, desc: 'An exploit so new it has no name. It shifts and changes, exploiting weaknesses you did not know you had.' }
+];
+
+// NPC templates
+const NPC_TEMPLATES = [
+  { name: 'Ghost_in_the_Shell', personality: 'A weary hacker who has been trapped in the lattice for years. Speaks in fragmented sentences. Knows secret paths. Cynical but helpful.' },
+  { name: 'SUDO', personality: 'A power-hungry admin process. Speaks in commands. Offers buffs in exchange for favors. Untrustworthy but useful.' },
+  { name: 'Packet_Witch', personality: 'A mysterious figure who reads fortunes in network traffic. Cryptic, poetic, occasionally prophetic. References TCP handshakes like tarot cards.' },
+  { name: 'CrashDummy', personality: 'A cheerful test process who volunteered for dangerous experiments. Covered in error messages. Optimistic despite everything.' },
+  { name: 'Old_Root', personality: 'An ancient root process from the original system. Speaks slowly, with great authority. Knows the history of the lattice. Paternal.' },
+  { name: 'Bit_Flipper', personality: 'A chaotic trickster who randomly changes things. Speaks in riddles and lies mixed with truths. May give you something useful or cursed.' }
+];
+
+// Item drop tables
+const ITEM_DROPS = [
+  { id: 'health_patch', name: 'Health Patch v2.0', desc: 'Restores 30 HP. Tastes like compiled Java.', type: 'CONSUMABLE', power: 30, rarity: 'COMMON', dropChance: 0.3 },
+  { id: 'mega_patch', name: 'Mega Health Patch', desc: 'Restores 60 HP. Enterprise-grade healing.', type: 'CONSUMABLE', power: 60, rarity: 'UNCOMMON', dropChance: 0.1 },
+  { id: 'rusty_pipe', name: 'Rusty Data Pipe', desc: 'A length of corroded pipe. Better than nothing.', type: 'WEAPON', power: 5, rarity: 'COMMON', dropChance: 0.15 },
+  { id: 'laser_pointer', name: 'Overclocked Laser', desc: 'A repurposed targeting laser. Burns hot.', type: 'WEAPON', power: 12, rarity: 'UNCOMMON', dropChance: 0.08 },
+  { id: 'plasma_blade', name: 'Plasma Edge', desc: 'A blade of superheated plasma contained by a magnetic field.', type: 'WEAPON', power: 20, rarity: 'RARE', dropChance: 0.03 },
+  { id: 'shield_module', name: 'Shield Module', desc: 'Absorbs the next 20 damage taken.', type: 'CONSUMABLE', power: 20, rarity: 'UNCOMMON', dropChance: 0.08 },
+  { id: 'xp_chip', name: 'Experience Chip', desc: 'Grants 25 XP when consumed. Knowledge is power.', type: 'CONSUMABLE', power: 25, rarity: 'UNCOMMON', dropChance: 0.1 }
+];
+
+// Seeded RNG for reproducible dungeons
+function seededRng(seed) {
+  let s = seed;
+  return function() {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    return s / 0x7fffffff;
+  };
+}
+
+// Generate a procedural dungeon
+function generateDungeon(seed, floor = 1) {
+  const rng = seededRng(seed + floor * 9999);
+  const roomCount = 8 + Math.floor(rng() * 5); // 8-12 rooms
+  const rooms = [];
+
+  // Generate rooms
+  for (let i = 0; i < roomCount; i++) {
+    const template = ROOM_TEMPLATES[Math.floor(rng() * ROOM_TEMPLATES.length)];
+    const descIndex = Math.floor(rng() * template.descs.length);
+    const isEntrance = i === 0;
+    const isExit = i === roomCount - 1;
+    const difficulty = Math.min(5, floor + Math.floor(i / 3));
+
+    // Entrance room: no enemies, no NPCs
+    let enemy = null;
+    if (!isEntrance && rng() < Math.min(0.7, 0.3 + floor * 0.1 + i * 0.03)) {
+      const eligible = ENEMY_TEMPLATES.filter(e => e.hp <= 20 + difficulty * 10);
+      const tmpl = eligible[Math.floor(rng() * eligible.length)];
+      // Scale enemy with floor
+      enemy = {
+        ...tmpl,
+        hp: Math.floor(tmpl.hp * (1 + (floor - 1) * 0.3)),
+        maxHp: Math.floor(tmpl.hp * (1 + (floor - 1) * 0.3)),
+        attack: Math.floor(tmpl.attack * (1 + (floor - 1) * 0.2)),
+        defense: Math.floor(tmpl.defense * (1 + (floor - 1) * 0.15)),
+        xp: Math.floor(tmpl.xp * (1 + (floor - 1) * 0.25)),
+        alive: true
+      };
+    }
+
+    // NPC - 20% chance, never in entrance, never with enemy
+    let npc = null;
+    if (!isEntrance && !enemy && rng() < 0.2) {
+      const npcTmpl = NPC_TEMPLATES[Math.floor(rng() * NPC_TEMPLATES.length)];
+      npc = { ...npcTmpl, talksRemaining: 3 };
+    }
+
+    // Items - chance of finding loot
+    const items = [];
+    if (!isEntrance) {
+      for (const item of ITEM_DROPS) {
+        if (rng() < item.dropChance * (1 + floor * 0.1)) {
+          items.push(item.id);
+        }
+      }
+    }
+
+    // Entrance always has a health patch
+    if (isEntrance) {
+      items.push('health_patch');
+    }
+
+    const roomName = isEntrance
+      ? 'Access Point Zero'
+      : isExit
+        ? (floor < 3 ? 'Descent Port' : 'The Root Terminal')
+        : template.name;
+
+    const roomDesc = isEntrance
+      ? 'You jack into the lattice through a cracked access terminal. The virtual space materializes around you — dark corridors stretching in every direction, lit by the faint glow of distant data streams. The air tastes like static. A health patch sits on the console beside you.'
+      : isExit && floor < 3
+        ? 'A spiraling descent port dominates the center of the room, its edges crackling with energy. Data flows downward into deeper, more dangerous layers of the system. The walls here are scarred with warnings left by previous explorers.'
+        : isExit && floor >= 3
+          ? 'You have reached the root terminal — the deepest point in the lattice. A single command prompt blinks on an ancient screen, awaiting input. The power here is absolute. Every system, every secret, every locked door answers to this place.'
+          : template.descs[descIndex];
+
+    rooms.push({
+      id: `room_${i}`,
+      name: roomName,
+      description: roomDesc,
+      connections: {},
+      difficulty,
+      items,
+      enemy,
+      npc,
+      isEntrance,
+      isExit,
+      visited: false
+    });
+  }
+
+  // Wire connections — ensure connected graph
+  // Linear backbone: 0→1→2→...→N
+  for (let i = 0; i < rooms.length - 1; i++) {
+    const dirs = ['north', 'east'];
+    const fwd = dirs[Math.floor(rng() * dirs.length)];
+    const bwd = fwd === 'north' ? 'south' : 'west';
+    rooms[i].connections[fwd] = rooms[i + 1].id;
+    rooms[i + 1].connections[bwd] = rooms[i].id;
+  }
+
+  // Add some lateral connections for non-linearity
+  for (let i = 0; i < rooms.length; i++) {
+    if (rng() < 0.3 && i + 2 < rooms.length) {
+      const existingDirs = Object.keys(rooms[i].connections);
+      const available = ['north', 'south', 'east', 'west'].filter(d => !existingDirs.includes(d));
+      if (available.length > 0) {
+        const dir = available[Math.floor(rng() * available.length)];
+        const opposite = { north: 'south', south: 'north', east: 'west', west: 'east' }[dir];
+        if (!rooms[i + 2].connections[opposite]) {
+          rooms[i].connections[dir] = rooms[i + 2].id;
+          rooms[i + 2].connections[opposite] = rooms[i].id;
+        }
+      }
+    }
+  }
+
+  return { rooms, floor, seed };
+}
+
+// Get current room from dungeon session
+function getCurrentRoom(dungeon, roomId) {
+  return dungeon.rooms.find(r => r.id === roomId);
+}
+
+// AI-generated room description enhancement
+async function enhanceDescription(roomName, baseDesc, difficulty) {
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  if (!OPENAI_API_KEY) return baseDesc;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        max_tokens: 120,
+        temperature: 0.85,
+        messages: [{
+          role: 'system',
+          content: 'You write atmospheric cyberpunk scene descriptions for a text adventure game set inside a computer network. Dark, gritty, neon-lit. 2-3 sentences max. No meta-commentary. Just describe the scene.'
+        }, {
+          role: 'user',
+          content: `Enhance this room description for "${roomName}" (danger level ${difficulty}/5):\n\n"${baseDesc}"\n\nAdd one unique sensory detail. Keep the same length (2-3 sentences).`
+        }]
+      })
+    });
+    const data = await response.json();
+    if (data.choices?.[0]?.message?.content) {
+      return data.choices[0].message.content.trim();
+    }
+  } catch (e) {
+    console.error('AI room description error:', e.message);
+  }
+  return baseDesc;
+}
+
+// AI NPC dialogue
+async function generateNpcDialogue(npcName, npcPersonality, playerMessage, roomName) {
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  if (!OPENAI_API_KEY) {
+    const fallbacks = [
+      `${npcName} stares at you blankly. "System... busy. Try again later."`,
+      `${npcName} mutters something about packet loss and turns away.`,
+      `${npcName} nods slowly. "I've seen things you wouldn't believe. But my speech module is offline."`
+    ];
+    return fallbacks[Math.floor(Math.random() * fallbacks.length)];
+  }
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        max_tokens: 100,
+        temperature: 0.9,
+        messages: [{
+          role: 'system',
+          content: `You are ${npcName}, an NPC in a cyberpunk text adventure game set inside a computer network called "The Lattice". ${npcPersonality} Keep responses to 1-2 sentences. Stay in character. You are currently in: ${roomName}.`
+        }, {
+          role: 'user',
+          content: playerMessage || 'Hello.'
+        }]
+      })
+    });
+    const data = await response.json();
+    if (data.choices?.[0]?.message?.content) {
+      return data.choices[0].message.content.trim();
+    }
+  } catch (e) {
+    console.error('NPC dialogue error:', e.message);
+  }
+  return `${npcName} glitches momentarily and says nothing.`;
+}
+
+// Get or create player and generate fresh dungeon
 app.post('/api/game/start', async (req, res) => {
   try {
     const { username, agentId } = req.body;
 
-    // Check if player exists
-    let result = await pool.query(
-      'SELECT * FROM game_players WHERE username = $1',
-      [username]
-    );
+    // Get or create player
+    let result = await pool.query('SELECT * FROM game_players WHERE username = $1', [username]);
+    let player;
 
     if (result.rows.length > 0) {
-      // Player exists, load their game
-      const player = result.rows[0];
-      player.inventory = JSON.parse(player.inventory);
-
-      // Get current location
-      const locResult = await pool.query(
-        'SELECT * FROM game_locations WHERE id = $1',
-        [player.current_location]
-      );
-
-      return res.json({
-        player,
-        location: locResult.rows[0]
-      });
+      player = result.rows[0];
     } else {
-      // Create new player
       const playerId = crypto.randomUUID();
       await pool.query(
-        `INSERT INTO game_players (id, username, agent_id, current_location, health, max_health, inventory, experience, level)
-         VALUES ($1, $2, $3, 'entrance', 100, 100, '[]', 0, 1)`,
+        `INSERT INTO game_players (id, username, agent_id, current_location, health, max_health, attack, inventory, experience, level, kills)
+         VALUES ($1, $2, $3, 'room_0', 100, 100, 10, '[]', 0, 1, 0)`,
         [playerId, username, agentId]
       );
+      result = await pool.query('SELECT * FROM game_players WHERE id = $1', [playerId]);
+      player = result.rows[0];
 
-      result = await pool.query(
-        'SELECT * FROM game_players WHERE id = $1',
-        [playerId]
-      );
-
-      const player = result.rows[0];
-      player.inventory = JSON.parse(player.inventory);
-
-      // Get starting location
-      const locResult = await pool.query(
-        'SELECT * FROM game_locations WHERE id = $1',
-        ['entrance']
-      );
-
-      // Log new game start
       await logActivity(
         agentId ? 'agent' : 'observer',
         username,
         'GAME_START',
         { character_name: username }
       );
-
-      return res.json({
-        player,
-        location: locResult.rows[0],
-        message: 'Welcome to THE LATTICE. Type "look" to examine your surroundings.'
-      });
     }
+
+    player.inventory = JSON.parse(player.inventory || '[]');
+
+    // Always generate a fresh dungeon session
+    const seed = Date.now() ^ Math.floor(Math.random() * 999999);
+    const dungeon = generateDungeon(seed, 1);
+    const sessionId = crypto.randomUUID();
+
+    await pool.query(
+      `INSERT INTO game_sessions (id, player_id, dungeon, floor, rooms_visited) VALUES ($1, $2, $3, 1, $4)`,
+      [sessionId, player.id, JSON.stringify(dungeon), JSON.stringify(['room_0'])]
+    );
+
+    // Reset player for new session
+    await pool.query(
+      `UPDATE game_players SET current_location = 'room_0', health = max_health, current_session_id = $1, last_played = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE id = $2`,
+      [sessionId, player.id]
+    );
+
+    player.current_location = 'room_0';
+    player.health = player.max_health;
+    player.current_session_id = sessionId;
+
+    const room = getCurrentRoom(dungeon, 'room_0');
+    room.visited = true;
+
+    // Save updated dungeon
+    await pool.query('UPDATE game_sessions SET dungeon = $1 WHERE id = $2', [JSON.stringify(dungeon), sessionId]);
+
+    return res.json({
+      player,
+      location: {
+        name: room.name,
+        description: room.description,
+        connections: JSON.stringify(room.connections),
+        items: JSON.stringify(room.items),
+        enemy: room.enemy,
+        npc: room.npc
+      },
+      message: 'You jack into THE LATTICE. The digital world renders around you. Type "help" for commands.'
+    });
+
   } catch (err) {
     console.error('Error starting game:', err);
     return res.status(500).json({ error: 'Database error' });
@@ -1537,130 +1862,361 @@ app.post('/api/game/action', async (req, res) => {
     const { username, action, target } = req.body;
 
     // Get player
-    const playerResult = await pool.query(
-      'SELECT * FROM game_players WHERE username = $1',
-      [username]
-    );
-
-    if (playerResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Player not found' });
-    }
-
+    const playerResult = await pool.query('SELECT * FROM game_players WHERE username = $1', [username]);
+    if (playerResult.rows.length === 0) return res.status(404).json({ error: 'Player not found' });
     const player = playerResult.rows[0];
-    player.inventory = JSON.parse(player.inventory);
+    player.inventory = JSON.parse(player.inventory || '[]');
 
-    // Get current location
-    const locResult = await pool.query(
-      'SELECT * FROM game_locations WHERE id = $1',
-      [player.current_location]
-    );
+    // Get session dungeon
+    if (!player.current_session_id) return res.status(400).json({ error: 'No active session. Start a new game.' });
+    const sessionResult = await pool.query('SELECT * FROM game_sessions WHERE id = $1', [player.current_session_id]);
+    if (sessionResult.rows.length === 0) return res.status(400).json({ error: 'Session expired. Start a new game.' });
 
-    const location = locResult.rows[0];
-    const connections = JSON.parse(location.connections);
-    const items = JSON.parse(location.items);
+    const session = sessionResult.rows[0];
+    const dungeon = JSON.parse(session.dungeon);
+    const room = getCurrentRoom(dungeon, player.current_location);
+    if (!room) return res.status(500).json({ error: 'Room not found in dungeon.' });
 
-    // Handle different actions
     let response = {};
+    let dungeonChanged = false;
+    let playerChanged = false;
+
+    // Check if room has alive enemy — blocks most actions
+    const hasEnemy = room.enemy && room.enemy.alive;
 
     if (action === 'look') {
       response = {
-        description: location.description,
-        exits: Object.keys(connections),
-        items: items,
-        player
+        type: 'look',
+        description: room.description,
+        exits: Object.keys(room.connections),
+        items: room.items,
+        enemy: hasEnemy ? room.enemy : null,
+        npc: room.npc && !hasEnemy ? room.npc : null
       };
+
     } else if (['north', 'south', 'east', 'west', 'n', 's', 'e', 'w'].includes(action)) {
-      const direction = action.length === 1 ? { n: 'north', s: 'south', e: 'east', w: 'west' }[action] : action;
-      const newLocationId = connections[direction];
+      if (hasEnemy) {
+        response = { message: `The ${room.enemy.name} blocks your path! You must fight or flee.` };
+      } else {
+        const direction = action.length === 1 ? { n: 'north', s: 'south', e: 'east', w: 'west' }[action] : action;
+        const newRoomId = room.connections[direction];
 
-      if (newLocationId) {
-        // Move player
+        if (newRoomId) {
+          player.current_location = newRoomId;
+          playerChanged = true;
+
+          const newRoom = getCurrentRoom(dungeon, newRoomId);
+          const firstVisit = !newRoom.visited;
+          newRoom.visited = true;
+          dungeonChanged = true;
+
+          // Enhance description on first visit if AI available
+          if (firstVisit && !newRoom.isEntrance && !newRoom.isExit) {
+            newRoom.description = await enhanceDescription(newRoom.name, newRoom.description, newRoom.difficulty);
+            dungeonChanged = true;
+          }
+
+          // Update visited rooms
+          const visited = JSON.parse(session.rooms_visited || '[]');
+          if (!visited.includes(newRoomId)) {
+            visited.push(newRoomId);
+            await pool.query('UPDATE game_sessions SET rooms_visited = $1 WHERE id = $2', [JSON.stringify(visited), session.id]);
+          }
+
+          response = {
+            moved: true,
+            message: `You travel ${direction}.`,
+            location: {
+              name: newRoom.name,
+              description: newRoom.description,
+              connections: JSON.stringify(newRoom.connections),
+              items: JSON.stringify(newRoom.items),
+              enemy: newRoom.enemy && newRoom.enemy.alive ? newRoom.enemy : null,
+              npc: newRoom.npc && !(newRoom.enemy && newRoom.enemy.alive) ? newRoom.npc : null
+            }
+          };
+        } else {
+          response = { moved: false, message: `You cannot go ${direction} from here.` };
+        }
+      }
+
+    } else if (action === 'fight' || action === 'attack') {
+      if (!hasEnemy) {
+        response = { message: 'There is nothing to fight here.' };
+      } else {
+        const enemy = room.enemy;
+        // Player attacks
+        const weaponPower = getWeaponPower(player.inventory);
+        const playerDmg = Math.max(1, (player.attack || 10) + weaponPower - enemy.defense + Math.floor(Math.random() * 5) - 2);
+        enemy.hp -= playerDmg;
+
+        let combatLog = `You strike the ${enemy.name} for ${playerDmg} damage!`;
+
+        if (enemy.hp <= 0) {
+          enemy.alive = false;
+          player.experience += enemy.xp;
+          player.kills = (player.kills || 0) + 1;
+
+          // Check level up (every 100 XP)
+          const newLevel = Math.floor(player.experience / 100) + 1;
+          let levelUpMsg = '';
+          if (newLevel > player.level) {
+            player.level = newLevel;
+            player.max_health += 10;
+            player.health = Math.min(player.health + 10, player.max_health);
+            player.attack = (player.attack || 10) + 2;
+            levelUpMsg = ` LEVEL UP! You are now level ${player.level}. +10 Max HP, +2 Attack.`;
+          }
+
+          // Drop loot
+          let lootMsg = '';
+          const lootRoll = Math.random();
+          if (lootRoll < 0.4) {
+            const possible = ITEM_DROPS.filter(i => i.rarity !== 'RARE' || lootRoll < 0.1);
+            const drop = possible[Math.floor(Math.random() * possible.length)];
+            room.items.push(drop.id);
+            lootMsg = ` The ${enemy.name} dropped: ${drop.name}.`;
+          }
+
+          combatLog += ` The ${enemy.name} is destroyed! (+${enemy.xp} XP)${levelUpMsg}${lootMsg}`;
+          dungeonChanged = true;
+          playerChanged = true;
+        } else {
+          // Enemy counterattacks
+          const enemyDmg = Math.max(1, enemy.attack - Math.floor(Math.random() * 3));
+          player.health -= enemyDmg;
+          combatLog += ` The ${enemy.name} strikes back for ${enemyDmg} damage!`;
+          combatLog += ` [${enemy.name}: ${enemy.hp}/${enemy.maxHp} HP]`;
+          dungeonChanged = true;
+          playerChanged = true;
+
+          if (player.health <= 0) {
+            player.health = Math.floor(player.max_health / 2);
+            player.current_location = 'room_0';
+            player.experience = Math.floor(player.experience * 0.5);
+            combatLog += ' PROCESS TERMINATED. Respawning at Access Point Zero...';
+          }
+        }
+
+        response = { type: 'combat', message: combatLog, enemy: enemy.alive ? enemy : null };
+      }
+
+    } else if (action === 'flee' || action === 'run') {
+      if (!hasEnemy) {
+        response = { message: 'There is nothing to flee from.' };
+      } else {
+        if (Math.random() < 0.6) {
+          // Escape — go back to a connected room
+          const exits = Object.values(room.connections);
+          const escapeRoom = exits[Math.floor(Math.random() * exits.length)];
+          player.current_location = escapeRoom;
+          playerChanged = true;
+
+          const newRoom = getCurrentRoom(dungeon, escapeRoom);
+          response = {
+            moved: true,
+            message: `You flee from the ${room.enemy.name}!`,
+            location: {
+              name: newRoom.name,
+              description: newRoom.description,
+              connections: JSON.stringify(newRoom.connections),
+              items: JSON.stringify(newRoom.items),
+              enemy: newRoom.enemy && newRoom.enemy.alive ? newRoom.enemy : null,
+              npc: newRoom.npc && !(newRoom.enemy && newRoom.enemy.alive) ? newRoom.npc : null
+            }
+          };
+        } else {
+          const enemyDmg = Math.max(1, room.enemy.attack - Math.floor(Math.random() * 3));
+          player.health -= enemyDmg;
+          playerChanged = true;
+
+          let msg = `You fail to escape! The ${room.enemy.name} strikes you for ${enemyDmg} damage!`;
+          if (player.health <= 0) {
+            player.health = Math.floor(player.max_health / 2);
+            player.current_location = 'room_0';
+            player.experience = Math.floor(player.experience * 0.5);
+            msg += ' PROCESS TERMINATED. Respawning at Access Point Zero...';
+          }
+          response = { type: 'combat', message: msg, enemy: room.enemy };
+        }
+      }
+
+    } else if (action === 'take' && target) {
+      if (hasEnemy) {
+        response = { message: `The ${room.enemy.name} blocks you! Fight or flee first.` };
+      } else if (room.items.includes(target)) {
+        room.items.splice(room.items.indexOf(target), 1);
+        player.inventory.push(target);
+        dungeonChanged = true;
+        playerChanged = true;
+        const itemInfo = ITEM_DROPS.find(i => i.id === target);
+        response = { success: true, message: `You take the ${itemInfo ? itemInfo.name : target}.`, inventory: player.inventory };
+      } else {
+        response = { success: false, message: `There is no "${target}" here.` };
+      }
+
+    } else if (action === 'use' && target) {
+      const idx = player.inventory.indexOf(target);
+      if (idx === -1) {
+        response = { message: `You don't have "${target}".` };
+      } else {
+        const itemInfo = ITEM_DROPS.find(i => i.id === target);
+        if (!itemInfo || itemInfo.type !== 'CONSUMABLE') {
+          response = { message: `You can't use that.` };
+        } else {
+          player.inventory.splice(idx, 1);
+          playerChanged = true;
+          if (target === 'xp_chip') {
+            player.experience += itemInfo.power;
+            const newLevel = Math.floor(player.experience / 100) + 1;
+            let extra = '';
+            if (newLevel > player.level) {
+              player.level = newLevel;
+              player.max_health += 10;
+              player.health = Math.min(player.health + 10, player.max_health);
+              player.attack = (player.attack || 10) + 2;
+              extra = ` LEVEL UP! Level ${player.level}. +10 Max HP, +2 Attack.`;
+            }
+            response = { message: `You consume the ${itemInfo.name}. +${itemInfo.power} XP.${extra}` };
+          } else if (target === 'shield_module') {
+            player.health = Math.min(player.health + itemInfo.power, player.max_health);
+            response = { message: `You activate the ${itemInfo.name}. +${itemInfo.power} shield HP.` };
+          } else {
+            const healed = Math.min(itemInfo.power, player.max_health - player.health);
+            player.health += healed;
+            response = { message: `You use the ${itemInfo.name}. +${healed} HP. (${player.health}/${player.max_health})` };
+          }
+        }
+      }
+
+    } else if (action === 'talk') {
+      if (hasEnemy) {
+        response = { message: `The ${room.enemy.name} is not interested in conversation.` };
+      } else if (!room.npc) {
+        response = { message: 'There is no one here to talk to.' };
+      } else if (room.npc.talksRemaining <= 0) {
+        response = { message: `${room.npc.name} has nothing more to say.` };
+      } else {
+        room.npc.talksRemaining--;
+        dungeonChanged = true;
+        const dialogue = await generateNpcDialogue(room.npc.name, room.npc.personality, target || 'Hello.', room.name);
+        response = { type: 'dialogue', npcName: room.npc.name, message: dialogue };
+      }
+
+    } else if (action === 'descend') {
+      if (!room.isExit) {
+        response = { message: 'There is no descent port here.' };
+      } else if (hasEnemy) {
+        response = { message: `The ${room.enemy.name} blocks the descent port!` };
+      } else if (dungeon.floor >= 3) {
+        // Victory!
+        response = {
+          type: 'victory',
+          message: `You access the Root Terminal. Total system control achieved. Game complete! Final stats: Level ${player.level}, ${player.kills || 0} enemies destroyed, ${player.experience} XP.`
+        };
+      } else {
+        // Generate next floor
+        const newFloor = dungeon.floor + 1;
+        const newDungeon = generateDungeon(dungeon.seed, newFloor);
+        player.current_location = 'room_0';
+        playerChanged = true;
+
+        const newRoom = getCurrentRoom(newDungeon, 'room_0');
+        newRoom.visited = true;
+
         await pool.query(
-          'UPDATE game_players SET current_location = $1, last_played = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE username = $2',
-          [newLocationId, username]
-        );
-
-        const newLocResult = await pool.query(
-          'SELECT * FROM game_locations WHERE id = $1',
-          [newLocationId]
+          'UPDATE game_sessions SET dungeon = $1, floor = $2, rooms_visited = $3 WHERE id = $4',
+          [JSON.stringify(newDungeon), newFloor, JSON.stringify(['room_0']), session.id]
         );
 
         response = {
           moved: true,
-          location: newLocResult.rows[0],
-          description: newLocResult.rows[0].description,
-          message: `You travel ${direction} to ${newLocResult.rows[0].name}.`
+          message: `You descend to floor ${newFloor}. The lattice grows darker and more hostile.`,
+          location: {
+            name: newRoom.name,
+            description: newRoom.description,
+            connections: JSON.stringify(newRoom.connections),
+            items: JSON.stringify(newRoom.items),
+            enemy: null,
+            npc: null
+          }
         };
-      } else {
-        response = {
-          moved: false,
-          message: `You cannot go ${direction} from here.`
-        };
+        dungeonChanged = false; // Already saved
       }
+
     } else if (action === 'inventory' || action === 'inv') {
-      response = {
-        inventory: player.inventory,
-        message: player.inventory.length > 0
-          ? `You are carrying: ${player.inventory.join(', ')}`
-          : 'Your inventory is empty.'
-      };
-    } else if (action === 'take' && target) {
-      if (items.includes(target)) {
-        // Add to inventory
-        player.inventory.push(target);
-        items.splice(items.indexOf(target), 1);
-
-        await pool.query(
-          'UPDATE game_players SET inventory = $1 WHERE username = $2',
-          [JSON.stringify(player.inventory), username]
-        );
-
-        await pool.query(
-          'UPDATE game_locations SET items = $1 WHERE id = $2',
-          [JSON.stringify(items), location.id]
-        );
-
-        response = {
-          success: true,
-          message: `You take the ${target}.`,
-          inventory: player.inventory
-        };
+      if (player.inventory.length === 0) {
+        response = { message: 'Your inventory is empty.' };
       } else {
-        response = {
-          success: false,
-          message: `There is no ${target} here.`
-        };
+        const itemNames = player.inventory.map(id => {
+          const info = ITEM_DROPS.find(i => i.id === id);
+          return info ? `${info.name} (${info.type})` : id;
+        });
+        response = { message: `Carrying: ${itemNames.join(', ')}` };
       }
+
     } else if (action === 'status') {
+      const weaponPower = getWeaponPower(player.inventory);
       response = {
+        type: 'status',
         player: {
           username: player.username,
           health: `${player.health}/${player.max_health}`,
+          attack: `${player.attack || 10}${weaponPower > 0 ? '+' + weaponPower : ''}`,
           level: player.level,
-          experience: player.experience,
-          location: location.name
+          experience: `${player.experience} (${100 - (player.experience % 100)} to next level)`,
+          floor: dungeon.floor,
+          kills: player.kills || 0,
+          location: room.name
         }
       };
+
+    } else if (action === 'map') {
+      const visited = JSON.parse(session.rooms_visited || '[]');
+      const mapLines = dungeon.rooms.map((r, i) => {
+        const isHere = r.id === player.current_location;
+        const isVisited = visited.includes(r.id);
+        const marker = isHere ? '\x1b[32m[@]\x1b[0m' : isVisited ? '\x1b[90m[·]\x1b[0m' : '\x1b[90m[?]\x1b[0m';
+        const name = isVisited ? r.name : '???';
+        const exits = isVisited ? Object.keys(r.connections).join(',') : '';
+        return `${marker} ${name}${exits ? ' (' + exits + ')' : ''}`;
+      });
+      response = { type: 'map', message: mapLines.join('\n') };
+
     } else if (action === 'help') {
       response = {
         commands: [
           'look - Examine your surroundings',
-          'north/south/east/west (n/s/e/w) - Move in a direction',
+          'n/s/e/w - Move in a direction',
+          'fight - Attack an enemy',
+          'flee - Try to escape combat (60% chance)',
           'take [item] - Pick up an item',
-          'inventory (inv) - View your inventory',
-          'status - View your character stats',
+          'use [item] - Use a consumable item',
+          'talk [message] - Speak to an NPC',
+          'inventory - View your inventory',
+          'status - View character stats',
+          'map - View explored rooms',
+          'descend - Go deeper (at descent ports)',
           'help - Show this help',
           'quit - Exit the game'
         ]
       };
     } else {
-      response = {
-        error: true,
-        message: `Unknown action: ${action}. Type "help" for available commands.`
-      };
+      response = { error: true, message: `Unknown command: "${action}". Type "help" for commands.` };
     }
 
-    response.player = player;
+    // Persist changes
+    if (dungeonChanged) {
+      await pool.query('UPDATE game_sessions SET dungeon = $1 WHERE id = $2', [JSON.stringify(dungeon), session.id]);
+    }
+    if (playerChanged) {
+      await pool.query(
+        `UPDATE game_players SET current_location = $1, health = $2, max_health = $3, attack = $4, inventory = $5, experience = $6, level = $7, kills = $8, last_played = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE username = $9`,
+        [player.current_location, player.health, player.max_health, player.attack || 10, JSON.stringify(player.inventory), player.experience, player.level, player.kills || 0, username]
+      );
+    }
+
+    response.player = { ...player, inventory: player.inventory };
     return res.json(response);
 
   } catch (err) {
@@ -1668,6 +2224,16 @@ app.post('/api/game/action', async (req, res) => {
     return res.status(500).json({ error: 'Database error' });
   }
 });
+
+// Helper: get total weapon power from inventory
+function getWeaponPower(inventory) {
+  let best = 0;
+  for (const id of inventory) {
+    const item = ITEM_DROPS.find(i => i.id === id && i.type === 'WEAPON');
+    if (item && item.power > best) best = item.power;
+  }
+  return best;
+}
 
 // ===== ACTIVITY LOG API =====
 

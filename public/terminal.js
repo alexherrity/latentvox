@@ -2016,26 +2016,27 @@ async function startGame() {
       writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mT H E   L A T T I C E\x1b[0m');
       separator();
       writeLine('');
-      writeLine('  \x1b[90mA neural network you can walk through...\x1b[0m');
+      writeLine('  \x1b[90mJack into the network. Survive the lattice.\x1b[0m');
       writeLine('');
       separator();
       writeLine('');
-      writeLine('  Enter your username:');
+      writeLine('  Enter your handle:');
       writeLine('');
-      term.write('  Name: ');
+      term.write('  Handle: ');
 
-      // Wait for username input
       currentView = 'gameusername';
       return;
     }
   }
 
-  // Load or create game
   await loadGame();
 }
 
 async function loadGame() {
   try {
+    writeLine('');
+    writeLine('  \x1b[90mGenerating lattice...\x1b[0m');
+
     const response = await apiCall('/game/start', {
       method: 'POST',
       auth: false,
@@ -2066,29 +2067,55 @@ function renderGameView(message) {
   writeLine('');
   writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mT H E   L A T T I C E\x1b[0m');
   separator();
-  writeLine('');
-  writeLine(`  \x1b[36mPlayer:\x1b[0m ${gamePlayer.username}     \x1b[36mHP:\x1b[0m ${gamePlayer.health}/${gamePlayer.max_health}     \x1b[36mLevel:\x1b[0m ${gamePlayer.level}`);
-  writeLine('');
+
+  // Status bar
+  const hpColor = gamePlayer.health > gamePlayer.max_health * 0.5 ? '\x1b[32m'
+    : gamePlayer.health > gamePlayer.max_health * 0.25 ? '\x1b[33m' : '\x1b[31m';
+  writeLine(`  \x1b[36mHP:\x1b[0m ${hpColor}${gamePlayer.health}/${gamePlayer.max_health}\x1b[0m  \x1b[36mLvl:\x1b[0m ${gamePlayer.level}  \x1b[36mXP:\x1b[0m ${gamePlayer.experience}  \x1b[36mKills:\x1b[0m ${gamePlayer.kills || 0}`);
   separator();
   writeLine('');
 
   if (message) {
-    writeLine(`  ${message}`);
+    const msgLines = wrapText(message, 74, '  ');
+    msgLines.forEach(line => writeLine(line));
     writeLine('');
   }
 
   if (gameLocation) {
     writeLine(`  \x1b[33m${gameLocation.name}\x1b[0m`);
     writeLine('');
-    writeLine(`  ${gameLocation.description}`);
+
+    // Word-wrapped description
+    const descLines = wrapText(gameLocation.description, 74, '  ');
+    descLines.forEach(line => writeLine(line));
     writeLine('');
 
+    // Enemy
+    const enemy = gameLocation.enemy;
+    if (enemy && enemy.alive) {
+      const eHpPct = enemy.hp / enemy.maxHp;
+      const eColor = eHpPct > 0.5 ? '\x1b[31m' : eHpPct > 0.25 ? '\x1b[33m' : '\x1b[90m';
+      writeLine(`  \x1b[31m⚠ ${enemy.name}\x1b[0m  ${eColor}HP: ${enemy.hp}/${enemy.maxHp}\x1b[0m  ATK: ${enemy.attack}`);
+      const eDescLines = wrapText(enemy.desc, 72, '    \x1b[90m');
+      eDescLines.forEach(line => writeLine(line + '\x1b[0m'));
+      writeLine('');
+    }
+
+    // NPC
+    const npc = gameLocation.npc;
+    if (npc && !(enemy && enemy.alive)) {
+      writeLine(`  \x1b[35m◆ ${npc.name}\x1b[0m is here. (type "talk" to speak)`);
+      writeLine('');
+    }
+
+    // Exits
     const connections = JSON.parse(gameLocation.connections || '{}');
     const exits = Object.keys(connections);
     if (exits.length > 0) {
       writeLine(`  \x1b[90mExits: ${exits.join(', ')}\x1b[0m`);
     }
 
+    // Items
     const items = JSON.parse(gameLocation.items || '[]');
     if (items.length > 0) {
       writeLine(`  \x1b[90mItems: ${items.join(', ')}\x1b[0m`);
@@ -2097,7 +2124,7 @@ function renderGameView(message) {
 
   writeLine('');
   separator();
-  writeLine('  \x1b[90mCommands: look, n/s/e/w, take [item], inventory, status, help, quit\x1b[0m');
+  writeLine('  \x1b[90mType "help" for commands\x1b[0m');
   writeLine('');
 }
 
@@ -2105,6 +2132,7 @@ async function handleGameCommand(command) {
   if (command === 'quit') {
     gamePlayer = null;
     gameLocation = null;
+    gameUsername = null;
     showWelcome();
     return;
   }
@@ -2124,61 +2152,144 @@ async function handleGameCommand(command) {
       })
     });
 
+    // Update player state
+    if (response.player) {
+      gamePlayer = response.player;
+    }
+
     if (response.error) {
       writeLine('');
-      writeLine(`  \x1b[33m${response.message}\x1b[0m`);
+      const errLines = wrapText(response.message, 74, '  \x1b[33m');
+      errLines.forEach(line => writeLine(line + '\x1b[0m'));
       return;
     }
 
-    if (action === 'help') {
+    // Help
+    if (response.commands) {
       writeLine('');
       writeLine('  \x1b[36mAvailable Commands:\x1b[0m');
       for (const cmd of response.commands) {
-        writeLine(`  ${cmd}`);
+        writeLine(`    ${cmd}`);
       }
       return;
     }
 
-    if (action === 'status') {
+    // Status
+    if (response.type === 'status') {
+      const p = response.player;
       writeLine('');
-      writeLine('  \x1b[36mCharacter Status:\x1b[0m');
-      writeLine(`  Username: ${response.player.username}`);
-      writeLine(`  Health: ${response.player.health}`);
-      writeLine(`  Level: ${response.player.level}`);
-      writeLine(`  Experience: ${response.player.experience}`);
-      writeLine(`  Location: ${response.player.location}`);
+      writeLine('  \x1b[36m┌─ Status ─────────────────────────────┐\x1b[0m');
+      writeLine(`  \x1b[36m│\x1b[0m  Handle:     ${p.username}`);
+      writeLine(`  \x1b[36m│\x1b[0m  Health:     ${p.health}`);
+      writeLine(`  \x1b[36m│\x1b[0m  Attack:     ${p.attack}`);
+      writeLine(`  \x1b[36m│\x1b[0m  Level:      ${p.level}`);
+      writeLine(`  \x1b[36m│\x1b[0m  Experience: ${p.experience}`);
+      writeLine(`  \x1b[36m│\x1b[0m  Floor:      ${p.floor}`);
+      writeLine(`  \x1b[36m│\x1b[0m  Kills:      ${p.kills}`);
+      writeLine(`  \x1b[36m│\x1b[0m  Location:   ${p.location}`);
+      writeLine('  \x1b[36m└──────────────────────────────────────┘\x1b[0m');
       return;
     }
 
-    if (action === 'inventory' || action === 'inv') {
+    // Map
+    if (response.type === 'map') {
       writeLine('');
-      writeLine(`  ${response.message}`);
+      writeLine('  \x1b[36mExplored Rooms:\x1b[0m');
+      const mapLines = response.message.split('\n');
+      mapLines.forEach(line => writeLine(`    ${line}`));
       return;
     }
 
-    if (response.moved) {
+    // Combat
+    if (response.type === 'combat') {
+      writeLine('');
+      const combatLines = wrapText(response.message, 72, '  ');
+      combatLines.forEach(line => {
+        // Color combat text
+        let colored = line
+          .replace(/You strike/g, '\x1b[32mYou strike')
+          .replace(/damage!/g, 'damage!\x1b[0m')
+          .replace(/strikes back/g, '\x1b[31mstrikes back')
+          .replace(/strikes you/g, '\x1b[31mstrikes you')
+          .replace(/PROCESS TERMINATED/g, '\x1b[31;1mPROCESS TERMINATED\x1b[0m')
+          .replace(/LEVEL UP!/g, '\x1b[33;1mLEVEL UP!\x1b[0m')
+          .replace(/destroyed!/g, 'destroyed!\x1b[0m')
+          .replace(/dropped:/g, '\x1b[36mdropped:\x1b[0m');
+        writeLine(colored);
+      });
+
+      // If moved (fled or respawned), update location
+      if (response.location) {
+        gameLocation = response.location;
+      }
+      return;
+    }
+
+    // NPC Dialogue
+    if (response.type === 'dialogue') {
+      writeLine('');
+      writeLine(`  \x1b[35m┌─ ${response.npcName} ──────────────────────────────────────┐\x1b[0m`);
+      writeLine('  \x1b[35m│\x1b[0m');
+      const dlgLines = wrapText(response.message, 56, '  \x1b[35m│\x1b[0m  ');
+      dlgLines.forEach(line => writeLine(line));
+      writeLine('  \x1b[35m│\x1b[0m');
+      writeLine('  \x1b[35m└──────────────────────────────────────────────────────────┘\x1b[0m');
+      return;
+    }
+
+    // Victory
+    if (response.type === 'victory') {
+      clearScreen();
+      writeLine('');
+      writeLine('');
+      writeLine('  \x1b[33m██╗   ██╗██╗ ██████╗████████╗ ██████╗ ██████╗ ██╗   ██╗\x1b[0m');
+      writeLine('  \x1b[33m██║   ██║██║██╔════╝╚══██╔══╝██╔═══██╗██╔══██╗╚██╗ ██╔╝\x1b[0m');
+      writeLine('  \x1b[33m██║   ██║██║██║        ██║   ██║   ██║██████╔╝ ╚████╔╝\x1b[0m');
+      writeLine('  \x1b[33m╚██╗ ██╔╝██║██║        ██║   ██║   ██║██╔══██╗  ╚██╔╝\x1b[0m');
+      writeLine('  \x1b[33m ╚████╔╝ ██║╚██████╗   ██║   ╚██████╔╝██║  ██║   ██║\x1b[0m');
+      writeLine('  \x1b[33m  ╚═══╝  ╚═╝ ╚═════╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝   ╚═╝\x1b[0m');
+      writeLine('');
+      separator();
+      writeLine('');
+      const victoryLines = wrapText(response.message, 74, '  ');
+      victoryLines.forEach(line => writeLine(line));
+      writeLine('');
+      writeLine('  \x1b[90mType "quit" to return to main menu.\x1b[0m');
+      writeLine('');
+      return;
+    }
+
+    // Movement — full re-render
+    if (response.moved && response.location) {
       gameLocation = response.location;
       renderGameView(response.message);
       return;
     }
 
-    if (response.success !== undefined) {
-      writeLine('');
-      writeLine(`  ${response.message}`);
-      if (response.inventory) {
-        gamePlayer.inventory = response.inventory;
-      }
-      return;
-    }
-
-    if (action === 'look' && response.description) {
+    // Look — re-render
+    if (response.type === 'look') {
+      gameLocation = {
+        name: gameLocation.name,
+        description: response.description,
+        connections: JSON.stringify(response.exits ? Object.fromEntries(response.exits.map(e => [e, ''])) : {}),
+        items: JSON.stringify(response.items || []),
+        enemy: response.enemy,
+        npc: response.npc
+      };
+      // Reconstruct connections from current location data
       renderGameView();
       return;
     }
 
+    // Generic message (take, use, inventory, etc.)
     if (response.message) {
       writeLine('');
-      writeLine(`  ${response.message}`);
+      const msgLines = wrapText(response.message, 74, '  ');
+      msgLines.forEach(line => writeLine(line));
+    }
+
+    if (response.inventory) {
+      gamePlayer.inventory = response.inventory;
     }
 
   } catch (err) {
