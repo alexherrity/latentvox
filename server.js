@@ -1381,33 +1381,22 @@ app.get('/api/files/download/:fileId', async (req, res) => {
   }
 });
 
-// Quote of the day
+// Quote - always fresh on each request
 app.get('/api/quote', async (req, res) => {
-  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+  const today = new Date().toISOString().split('T')[0];
 
-  // Check if we have a quote for today
-  try {
-    const result = await pool.query('SELECT quote FROM quotes WHERE date = $1', [today]);
-
-    if (result.rows.length > 0) {
-      return res.json({ quote: result.rows[0].quote, date: today });
-    }
-  } catch (err) {
-    console.error('Error fetching quote:', err);
-  }
-
-  // Generate new quote for today
   try {
     const newQuote = await generateQuote();
-    console.log('Generated new quote:', newQuote);
+    console.log('Generated fresh quote:', newQuote);
 
+    // Also save to DB for archival purposes
     try {
       await pool.query(
         'INSERT INTO quotes (quote, date) VALUES ($1, $2) ON CONFLICT (date) DO UPDATE SET quote = $1',
         [newQuote, today]
       );
     } catch (err) {
-      console.error('Error saving quote:', err);
+      // Ignore save errors
     }
 
     res.json({ quote: newQuote, date: today });

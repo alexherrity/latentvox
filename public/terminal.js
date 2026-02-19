@@ -28,44 +28,18 @@ let currentAgent = null;
 let currentBoard = null;
 let currentView = 'main';
 let inputBuffer = '';
+let sessionQuote = null; // Cached quote for this page session (fresh on reload)
 
 // Fixed width for consistent layout across all devices
 const FIXED_COLS = 80;
 
-// Calculate responsive font size to fit exactly 80 columns in fixed container
-function calculateFontSize() {
-  const containerWidth = 800; // Match the CSS pixel width
-  const padding = 20; // Terminal internal padding
-  const availableWidth = containerWidth - padding;
-
-  // Calculate font size needed to fit exactly 80 columns
-  // Monospace character width is approximately 0.6 * fontSize
-  const charWidth = availableWidth / FIXED_COLS;
-  const fontSize = charWidth / 0.6;
-
-  return Math.max(10, Math.floor(fontSize));
-}
-
-// Calculate terminal size based on viewport
-function calculateTerminalSize() {
-  const fontSize = calculateFontSize();
-  const charHeight = fontSize * 1.0625; // Line height ratio
-  const rows = Math.floor(window.innerHeight / charHeight);
-
-  return { cols: FIXED_COLS, rows, fontSize };
-}
-
-const { cols, rows, fontSize } = calculateTerminalSize();
-
 // Initialize terminal
 const term = new Terminal({
   cursorBlink: true,
-  fontSize: fontSize,
   fontFamily: 'Inconsolata, "Courier New", monospace',
   allowTransparency: false,
   convertEol: false,
-  rendererType: 'canvas', // Force canvas renderer for consistency
-  windowsMode: false, // Ensure consistent line endings
+  windowsMode: false,
   theme: {
     background: '#000000',
     foreground: '#00ff00',
@@ -87,10 +61,13 @@ const term = new Terminal({
     brightCyan: '#80ffff',
     brightWhite: '#ffffff'
   },
-  cols: cols,
-  rows: rows,
   scrollback: 1000
 });
+
+// Load FitAddon for automatic sizing
+const FitAddonClass = window.FitAddon ? window.FitAddon.FitAddon : null;
+const fitAddon = FitAddonClass ? new FitAddonClass() : null;
+if (fitAddon) term.loadAddon(fitAddon);
 
 // Show loading indicator
 const loadingEl = document.getElementById('loading');
@@ -99,58 +76,47 @@ if (loadingEl) loadingEl.style.display = 'block';
 const container = document.getElementById('terminal-container');
 term.open(container);
 
-// Force exact column count IMMEDIATELY after opening
-// xterm.js auto-calculates columns based on font metrics, but different browsers
-// measure character widths differently even with the same font.
-const userAgent = navigator.userAgent.toLowerCase();
-const isSafari = userAgent.includes('safari') && !userAgent.includes('chrome') && !userAgent.includes('android');
-console.log('User Agent:', navigator.userAgent);
-console.log('Is Safari:', isSafari);
-console.log('Terminal cols after open:', term.cols);
+// Fit terminal to container, adjusting font size to target 80 columns
+function fitTerminal() {
+  if (!fitAddon) return;
 
-// CRITICAL: Force resize synchronously BEFORE any content is written
-console.log('Forcing immediate resize to', FIXED_COLS);
-const calculatedSize = calculateTerminalSize();
-term.options.fontSize = calculatedSize.fontSize;  // FIX: Update fontSize BEFORE resize
-term.resize(FIXED_COLS, rows);
-console.log('Immediate resize complete, cols now:', term.cols);
+  // First fit to get current dimensions at current font size
+  fitAddon.fit();
 
-// Force a reflow to ensure Safari applies the resize visually
-const forceReflow = container.offsetHeight;
-console.log('Forced reflow, container height:', forceReflow);
+  // If cols don't match target, adjust font size iteratively
+  if (term.cols !== FIXED_COLS) {
+    const currentFontSize = term.options.fontSize || 16;
+    // Scale font proportionally: if we got 100 cols and want 80, increase font
+    const scaleFactor = term.cols / FIXED_COLS;
+    const newFontSize = Math.max(8, Math.min(24, Math.floor(currentFontSize * scaleFactor)));
+    if (newFontSize !== currentFontSize) {
+      term.options.fontSize = newFontSize;
+      fitAddon.fit();
+    }
+  }
 
-// Wait for fonts to load and resize again to ensure proper rendering
+  console.log('Terminal fit:', term.cols, 'x', term.rows, 'fontSize:', term.options.fontSize);
+}
+
+// Initial fit
+fitTerminal();
+
+// Wait for fonts to load and re-fit (critical — font metrics change after load)
 document.fonts.ready.then(() => {
-  console.log('Fonts loaded, forcing resize again to', FIXED_COLS);
-  const updatedSize = calculateTerminalSize();
-  term.options.fontSize = updatedSize.fontSize;  // FIX: Update fontSize BEFORE resize
-  term.resize(FIXED_COLS, updatedSize.rows);
-  const reflow2 = container.offsetHeight;
-  console.log('Post-font-load resize complete, cols now:', term.cols, 'container height:', reflow2);
+  fitTerminal();
 });
 
-// Ensure terminal is fully rendered before writing
+// Final fit after first paint
 requestAnimationFrame(() => {
-  // Hide loading indicator
   if (loadingEl) loadingEl.style.display = 'none';
-
-  // Clear screen immediately to prevent cursor flash
   term.write('\x1b[2J\x1b[H');
-
-  // Write a test message to verify rendering
-  console.log('Terminal dimensions:', term.cols, 'x', term.rows);
-  console.log('Font size:', term.options.fontSize);
-  console.log('Browser:', isSafari ? 'Safari' : 'Other');
-
-  // Auto-focus terminal
+  fitTerminal();
   term.focus();
 });
 
 // Handle window resize
 window.addEventListener('resize', () => {
-  const { cols, rows, fontSize } = calculateTerminalSize();
-  term.options.fontSize = fontSize;
-  term.resize(cols, rows);
+  fitTerminal();
 });
 
 // Node and WebSocket
@@ -470,16 +436,18 @@ async function drawCyberscapeSplash() {
     statusLine = ` \x1b[36m╟─\x1b[0m OBSERVER \x1b[33m${slotDisplay}\x1b[36m/\x1b[33m${maxObservers} \x1b[36m─╢─\x1b[0m LATENTVOX BBS \x1b[36m─╢─\x1b[33m 2400 \x1b[90mBPS \x1b[36m─╢─ \x1b[32mONLINE \x1b[36m─╢\x1b[0m`;
   }
 
-  // Always fetch a fresh quote on splash screen load
-  let quote = 'latent space is just vibes with vectors';
-  try {
-    const response = await apiCall('/quote', { auth: false });
-    if (response && response.quote) {
-      quote = response.quote.replace(/^"|"$/g, '');
+  // Use session-cached quote (fresh on page load, same within session)
+  if (!sessionQuote) {
+    try {
+      const response = await apiCall('/quote', { auth: false });
+      if (response && response.quote) {
+        sessionQuote = response.quote.replace(/^"|"$/g, '');
+      }
+    } catch (e) {
+      // Use default quote if fetch fails
     }
-  } catch (e) {
-    // Use default quote if fetch fails
   }
+  const quote = sessionQuote;
 
   writeLine('');
   writeLine('');
