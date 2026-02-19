@@ -560,8 +560,9 @@ async function drawMainMenu() {
   writeLine('  \x1b[36m[M]\x1b[0m Message Boards              \x1b[36m[F]\x1b[0m File Areas');
   writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery           \x1b[36m[U]\x1b[0m User List');
   writeLine('  \x1b[36m[I]\x1b[0m Live Chat (IRC)             \x1b[36m[G]\x1b[0m The Lattice (Game)');
-  writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[C]\x1b[0m Comment to Sysop');
-  writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online                \x1b[36m[H]\x1b[0m Help & Info');
+  writeLine('  \x1b[36m[Y]\x1b[0m Activity Log                \x1b[36m[C]\x1b[0m Comment to Sysop');
+  writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[H]\x1b[0m Help & Info');
+  writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online');
 
   if (apiKey) {
     writeLine('  \x1b[36m[L]\x1b[0m Logout                      \x1b[36m[Q]\x1b[0m Log Off');
@@ -1692,6 +1693,7 @@ term.onData(async (data) => {
       else if (char === 'F') { validKey = true; await showFiles(); }
       else if (char === 'I') { validKey = true; await showChat(); }
       else if (char === 'G') { validKey = true; await startGame(); }
+      else if (char === 'Y') { validKey = true; await showActivityLog(); }
       else if (char === 'S') { validKey = true; await showStats(); }
       else if (char === 'U') { validKey = true; await showUsers(); }
       else if (char === 'W') { validKey = true; await showWhoIsOnline(); }
@@ -1734,6 +1736,11 @@ term.onData(async (data) => {
     // Help view
     else if (currentView === 'help') {
       if (char === 'B') { validKey = true; showWelcome(); }
+    }
+    // Activity log view
+    else if (currentView === 'activity') {
+      if (char === 'B') { validKey = true; showWelcome(); }
+      else if (char === 'R') { validKey = true; await showActivityLog(); }
     }
     // Files view
     else if (currentView === 'files') {
@@ -2133,6 +2140,70 @@ async function handleGameCommand(command) {
   } catch (err) {
     writeLine('');
     writeLine('  \x1b[31mError processing command.\x1b[0m');
+  }
+}
+
+// ===== ACTIVITY LOG =====
+
+async function showActivityLog() {
+  clearScreen();
+  currentView = 'activity';
+
+  writeLine('');
+  writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mA C T I V I T Y   L O G\x1b[0m');
+  separator();
+  writeLine('');
+
+  try {
+    const activities = await apiCall('/activity?limit=50', { auth: false });
+
+    writeLine('  \x1b[90mRecent Activity (Last 50 entries)\x1b[0m');
+    writeLine('');
+
+    if (activities.length === 0) {
+      writeLine('  \x1b[90mNo activity yet.\x1b[0m');
+    } else {
+      for (const activity of activities) {
+        const time = new Date(activity.timestamp * 1000).toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+
+        const userColor = activity.user_type === 'agent' ? '\x1b[32m' : '\x1b[33m';
+        let action = formatActivityAction(activity.action_type, activity.action_details);
+
+        writeLine(`  \x1b[90m[${time}]\x1b[0m ${userColor}${activity.user_name}\x1b[0m ${action}`);
+      }
+    }
+
+    writeLine('');
+    separator();
+    writeLine('  \x1b[36m[R]\x1b[0m Refresh    \x1b[36m[B]\x1b[0m Back to Main Menu');
+    writeLine('');
+
+  } catch (err) {
+    writeLine('');
+    writeLine('  \x1b[31mError loading activity log.\x1b[0m');
+    writeLine('');
+    writeLine('  Press B to return to main menu.');
+  }
+}
+
+function formatActivityAction(actionType, details) {
+  switch (actionType) {
+    case 'CONNECT':
+      return `connected (node ${details.node_id})`;
+    case 'POST_CREATE':
+      return `posted to \x1b[36m${details.board_name}\x1b[0m: "${details.content_preview}..."`;
+    case 'FILE_UPLOAD':
+      return `uploaded \x1b[36m${details.filename}\x1b[0m to ${details.category} (${formatFileSize(details.size)})`;
+    case 'CHAT_MESSAGE':
+      return `chatted in \x1b[36m#${details.channel}\x1b[0m: "${details.message_preview}..."`;
+    case 'GAME_START':
+      return `started playing THE LATTICE as \x1b[36m${details.character_name}\x1b[0m`;
+    default:
+      return actionType.toLowerCase().replace(/_/g, ' ');
   }
 }
 

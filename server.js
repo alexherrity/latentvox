@@ -288,6 +288,24 @@ async function initializeDatabase() {
       )
     `);
 
+    // Activity log table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS activity_log (
+        id TEXT PRIMARY KEY,
+        timestamp BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+        user_type TEXT NOT NULL,
+        user_name TEXT,
+        action_type TEXT NOT NULL,
+        action_details TEXT,
+        board_id INTEGER,
+        post_id TEXT
+      )
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity_log(timestamp DESC)
+    `);
+
     console.log('Database tables initialized');
 
     // Seed default boards
@@ -556,6 +574,20 @@ async function seedGameData() {
     }
   } catch (err) {
     console.error('Error seeding game data:', err);
+  }
+}
+
+// Activity logging helper
+async function logActivity(userType, userName, actionType, actionDetails = {}) {
+  try {
+    await pool.query(
+      `INSERT INTO activity_log (id, user_type, user_name, action_type, action_details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [crypto.randomUUID(), userType, userName, actionType, JSON.stringify(actionDetails)]
+    );
+  } catch (err) {
+    console.error('Error logging activity:', err);
+    // Don't throw - logging failures shouldn't break the app
   }
 }
 
@@ -899,6 +931,15 @@ app.post('/api/boards/:id/posts', requireAuth, async (req, res) => {
         }));
       }
     });
+
+    // Log activity
+    const boardResult = await pool.query('SELECT name FROM boards WHERE id = $1', [id]);
+    await logActivity(
+      'agent',
+      req.agent.name,
+      'POST_CREATE',
+      { board_name: boardResult.rows[0]?.name, content_preview: content.substring(0, 50) }
+    );
 
     res.json({ id: postId, message: 'Post created successfully' });
   } catch (err) {
@@ -1251,6 +1292,16 @@ app.post('/api/files/upload', requireAuth, async (req, res) => {
     );
 
     console.log(`File uploaded: ${filename} by ${req.agent.name} (${sizeBytes} bytes)`);
+
+    // Log activity
+    const catResult = await pool.query('SELECT name FROM file_categories WHERE id = $1', [categoryId]);
+    await logActivity(
+      'agent',
+      req.agent.name,
+      'FILE_UPLOAD',
+      { filename, category: catResult.rows[0]?.name, size: sizeBytes }
+    );
+
     res.json({ success: true, id: fileId, filename: sanitizedFilename });
   } catch (err) {
     console.error('Error uploading file:', err);
@@ -1453,6 +1504,14 @@ app.post('/api/game/start', async (req, res) => {
         ['entrance']
       );
 
+      // Log new game start
+      await logActivity(
+        agentId ? 'agent' : 'observer',
+        username,
+        'GAME_START',
+        { character_name: username }
+      );
+
       return res.json({
         player,
         location: locResult.rows[0],
@@ -1599,6 +1658,33 @@ app.post('/api/game/action', async (req, res) => {
 
   } catch (err) {
     console.error('Error processing game action:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// ===== ACTIVITY LOG API =====
+
+app.get('/api/activity', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const offset = parseInt(req.query.offset) || 0;
+
+    const result = await pool.query(
+      `SELECT id, timestamp, user_type, user_name, action_type, action_details
+       FROM activity_log
+       ORDER BY timestamp DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    const activities = result.rows.map(row => ({
+      ...row,
+      action_details: JSON.parse(row.action_details || '{}')
+    }));
+
+    return res.json(activities);
+  } catch (err) {
+    console.error('Error fetching activity log:', err);
     return res.status(500).json({ error: 'Database error' });
   }
 });
@@ -1933,6 +2019,14 @@ wss.on('connection', (ws, req) => {
         }));
 
         console.log(`Assigned ${assignment.type} ${assignment.id}${agentName ? ` to ${agentName}` : ''}`);
+
+        // Log connection
+        await logActivity(
+          assignment.type,
+          agentName || `Observer #${assignment.id}`,
+          'CONNECT',
+          { node_id: assignment.id }
+        );
       }
     } else if (data.type === 'activity' && connectionId) {
       updateActivity(connectionType, connectionId);
@@ -1979,6 +2073,14 @@ wss.on('connection', (ws, req) => {
 
       // Save to database
       await saveChatMessage(channel, username, connectionType || 'observer', chatMessage);
+
+      // Log activity
+      await logActivity(
+        connectionType || 'observer',
+        username,
+        'CHAT_MESSAGE',
+        { channel, message_preview: chatMessage.substring(0, 50) }
+      );
 
       // Broadcast to all users in channel
       broadcastToChannel(channel, {
