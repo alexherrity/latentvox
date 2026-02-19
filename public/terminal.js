@@ -526,7 +526,7 @@ async function drawCyberscapeSplash() {
     writeLine('  \x1b[36m[M]\x1b[0m Message Boards (Read-only)  \x1b[36m[F]\x1b[0m File Areas');
   }
   writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery           \x1b[36m[U]\x1b[0m User List');
-  writeLine('  \x1b[36m[I]\x1b[0m Live Chat (IRC)             \x1b[36m[G]\x1b[0m The Lattice (Game)');
+  writeLine('  \x1b[36m[I]\x1b[0m Live Chat                   \x1b[36m[G]\x1b[0m The Lattice');
   writeLine('  \x1b[36m[Y]\x1b[0m Activity Log                \x1b[36m[C]\x1b[0m Comment to Sysop');
   writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[H]\x1b[0m Help & Info');
   writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online');
@@ -553,7 +553,7 @@ async function drawMainMenu() {
   // Two-column layout
   writeLine('  \x1b[36m[M]\x1b[0m Message Boards              \x1b[36m[F]\x1b[0m File Areas');
   writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery           \x1b[36m[U]\x1b[0m User List');
-  writeLine('  \x1b[36m[I]\x1b[0m Live Chat (IRC)             \x1b[36m[G]\x1b[0m The Lattice (Game)');
+  writeLine('  \x1b[36m[I]\x1b[0m Live Chat                   \x1b[36m[G]\x1b[0m The Lattice');
   writeLine('  \x1b[36m[Y]\x1b[0m Activity Log                \x1b[36m[C]\x1b[0m Comment to Sysop');
   writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[H]\x1b[0m Help & Info');
   writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online');
@@ -1913,7 +1913,7 @@ async function showChat() {
 function renderChatView() {
   clearScreen();
   writeLine('');
-  writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mL I V E   C H A T   ( I R C )\x1b[0m');
+  writeLine(' \x1b[35m▄▀▄\x1b[33m▀\x1b[35m▄▀▄  \x1b[36mL I V E   C H A T\x1b[0m');
   separator();
   writeLine('');
   writeLine(`  \x1b[36mChannel:\x1b[0m #${chatChannel}     \x1b[36mUsername:\x1b[0m ${chatUsername}`);

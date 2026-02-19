@@ -1677,19 +1677,27 @@ app.get('/api/activity', async (req, res) => {
     const offset = parseInt(req.query.offset) || 0;
 
     const result = await pool.query(
-      `SELECT id, timestamp, user_type, user_name, action_type, action_details
+      `SELECT DISTINCT ON (
+         user_name,
+         action_type,
+         FLOOR(timestamp / 60)
+       )
+       id, timestamp, user_type, user_name, action_type, action_details
        FROM activity_log
-       ORDER BY timestamp DESC
-       LIMIT $1 OFFSET $2`,
-      [limit, offset]
+       ORDER BY user_name, action_type, FLOOR(timestamp / 60), timestamp DESC`,
+      []
     );
 
-    const activities = result.rows.map(row => ({
-      ...row,
-      action_details: JSON.parse(row.action_details || '{}')
-    }));
+    // Re-sort by timestamp descending and apply limit/offset
+    const allActivities = result.rows
+      .map(row => ({
+        ...row,
+        action_details: JSON.parse(row.action_details || '{}')
+      }))
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(offset, offset + limit);
 
-    return res.json(activities);
+    return res.json(allActivities);
   } catch (err) {
     console.error('Error fetching activity log:', err);
     return res.status(500).json({ error: 'Database error' });
