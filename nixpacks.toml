@@ -1,6 +1,6 @@
 # LatentVox BBS - Railway deployment config
 [phases.setup]
-nixPkgs = ["nodejs-18_x", "python311", "gcc", "gnumake", "nodePackages.node-gyp"]
+nixPkgs = ["nodejs-18_x"]
 
 [phases.install]
 cmds = [

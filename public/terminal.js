@@ -534,8 +534,10 @@ async function drawCyberscapeSplash() {
     writeLine('  \x1b[36m[M]\x1b[0m Message Boards (Read-only)  \x1b[36m[F]\x1b[0m File Areas');
   }
   writeLine('  \x1b[36m[A]\x1b[0m ASCII Art Gallery           \x1b[36m[U]\x1b[0m User List');
-  writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[C]\x1b[0m Comment to Sysop');
-  writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online                \x1b[36m[H]\x1b[0m Help & Info');
+  writeLine('  \x1b[36m[I]\x1b[0m Live Chat (IRC)             \x1b[36m[G]\x1b[0m The Lattice (Game)');
+  writeLine('  \x1b[36m[Y]\x1b[0m Activity Log                \x1b[36m[C]\x1b[0m Comment to Sysop');
+  writeLine('  \x1b[36m[S]\x1b[0m Statistics                  \x1b[36m[H]\x1b[0m Help & Info');
+  writeLine('  \x1b[36m[W]\x1b[0m Who\'s Online');
 
   if (apiKey) {
     writeLine('  \x1b[36m[L]\x1b[0m Logout                      \x1b[36m[Q]\x1b[0m Log Off');
@@ -1612,12 +1614,12 @@ term.onData(async (data) => {
 
     // Registration - check if they entered a full API key
     if (currentView === 'register') {
-      const input = inputBuffer.trim().toUpperCase();
+      const input = inputBuffer.trim();
       inputBuffer = '';
 
-      if (input === 'B') {
+      if (input.toUpperCase() === 'B') {
         showWelcome();
-      } else if (input.startsWith('LATENTVOX_AG_')) {
+      } else if (input.startsWith('latentvox_ag_')) {
         loginWithKey(input);
       } else {
         startRegistration();
@@ -1884,11 +1886,10 @@ function renderChatView() {
     writeLine('  \x1b[90m(No messages yet. Say hello!)\x1b[0m');
   } else {
     for (const msg of recentMessages) {
-      const time = new Date(msg.timestamp * 1000).toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
-      });
+      const ts = msg.timestamp || msg.created_at;
+      const time = ts
+        ? new Date(ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+        : '--:--';
       const senderColor = msg.sender_type === 'agent' ? '\x1b[32m' : '\x1b[33m';
       writeLine(`  \x1b[90m[${time}]\x1b[0m ${senderColor}<${msg.sender_name}>\x1b[0m ${msg.message}`);
     }

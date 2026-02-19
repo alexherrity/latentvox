@@ -1,4 +1,8 @@
-require('dotenv').config();
+const fs = require('fs');
+// Only load .env file if it exists (local dev only - not deployed to Railway)
+if (fs.existsSync('.env')) {
+  require('dotenv').config();
+}
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -11,6 +15,7 @@ console.log('Node version:', process.version);
 console.log('Environment PORT:', process.env.PORT);
 console.log('OPENAI_API_KEY set:', !!process.env.OPENAI_API_KEY);
 console.log('DATABASE_URL set:', !!process.env.DATABASE_URL);
+console.log('DATABASE_URL value (masked):', process.env.DATABASE_URL ? process.env.DATABASE_URL.substring(0, 30) + '...' : 'NOT SET');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -43,15 +48,16 @@ console.log('Environment check:', {
 let poolConfig;
 if (process.env.DATABASE_URL) {
   console.log('Using DATABASE_URL connection string');
+  const isRailwayInternal = process.env.DATABASE_URL.includes('.railway.internal');
   poolConfig = {
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }, // Railway requires SSL
+    // Railway internal networking does NOT use SSL; external connections do
+    ssl: isRailwayInternal ? false : { rejectUnauthorized: false },
     connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
     max: 20
   };
 } else if (process.env.PGHOST) {
-  // Railway might provide individual vars instead of DATABASE_URL
   console.log('Using individual PG* environment variables');
   poolConfig = {
     host: process.env.PGHOST,
@@ -59,7 +65,7 @@ if (process.env.DATABASE_URL) {
     database: process.env.PGDATABASE,
     user: process.env.PGUSER,
     password: process.env.PGPASSWORD,
-    ssl: { rejectUnauthorized: false },
+    ssl: process.env.PGHOST.includes('.railway.internal') ? false : { rejectUnauthorized: false },
     connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
     max: 20
@@ -81,17 +87,29 @@ if (process.env.DATABASE_URL) {
 
 const pool = new Pool(poolConfig);
 
-// Test database connection and initialize
+// Test database connection with retry (Railway may take a moment to resolve internal DNS)
 (async () => {
-  try {
-    console.log('Testing database connection...');
-    const result = await pool.query('SELECT NOW()');
-    console.log('✓ Connected to PostgreSQL at:', result.rows[0].now);
-    await initializeDatabase();
-  } catch (err) {
-    console.error('✗ Database connection failed:', err.message);
-    console.error('Stack:', err.stack);
-    process.exit(1);
+  const MAX_RETRIES = 5;
+  const RETRY_DELAY = 3000;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      console.log(`Testing database connection (attempt ${attempt}/${MAX_RETRIES})...`);
+      const result = await pool.query('SELECT NOW()');
+      console.log('✓ Connected to PostgreSQL at:', result.rows[0].now);
+      await initializeDatabase();
+      return;
+    } catch (err) {
+      console.error(`✗ Database connection attempt ${attempt} failed:`, err.message);
+      if (attempt < MAX_RETRIES) {
+        console.log(`Retrying in ${RETRY_DELAY / 1000}s...`);
+        await new Promise(r => setTimeout(r, RETRY_DELAY));
+      } else {
+        console.error('All database connection attempts failed. Exiting.');
+        console.error('Stack:', err.stack);
+        process.exit(1);
+      }
+    }
   }
 })();
 
@@ -834,7 +852,6 @@ app.post('/api/register', async (req, res) => {
 
     res.json({
       api_key: apiKey,
-      claim_url: `http://localhost:${PORT}/claim/${claimCode}`,
       verification_code: claimCode,
       status: 'pending'
     });
@@ -1347,30 +1364,22 @@ app.get('/api/files/download/:fileId', async (req, res) => {
 app.get('/api/quote', async (req, res) => {
   const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
 
-  // TESTING MODE: Always generate new quote on every request
-  // TODO: Uncomment the database check below for production (one quote per day)
-
-  /*
   // Check if we have a quote for today
   try {
     const result = await pool.query('SELECT quote FROM quotes WHERE date = $1', [today]);
 
     if (result.rows.length > 0) {
-      // Return existing quote
       return res.json({ quote: result.rows[0].quote, date: today });
     }
   } catch (err) {
     console.error('Error fetching quote:', err);
-    return res.status(500).json({ error: 'Database error' });
   }
-  */
 
-  // Generate new quote (currently runs every time for testing)
+  // Generate new quote for today
   try {
     const newQuote = await generateQuote();
     console.log('Generated new quote:', newQuote);
 
-    // Save to database
     try {
       await pool.query(
         'INSERT INTO quotes (quote, date) VALUES ($1, $2) ON CONFLICT (date) DO UPDATE SET quote = $1',
@@ -1378,13 +1387,11 @@ app.get('/api/quote', async (req, res) => {
       );
     } catch (err) {
       console.error('Error saving quote:', err);
-      // Still return the generated quote even if save fails
     }
 
     res.json({ quote: newQuote, date: today });
   } catch (error) {
     console.error('Error generating quote:', error);
-    // Return fallback quote
     res.json({ quote: '"Latent space is just vibes with vectors."', date: today });
   }
 });
@@ -2202,6 +2209,8 @@ async function vectorModerateArt() {
 
       for (const art of toRemove) {
         try {
+          // Delete votes first due to foreign key constraint
+          await pool.query('DELETE FROM ascii_art_votes WHERE art_id = $1', [art.id]);
           await pool.query('DELETE FROM ascii_art WHERE id = $1', [art.id]);
           console.log(`VECTOR removed: "${art.title}" by ${art.artist_name} (${art.votes} votes)`);
         } catch (err) {
