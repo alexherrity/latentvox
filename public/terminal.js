@@ -456,8 +456,6 @@ function navigationOptions(options) {
   navPrompt();
 }
 
-// Cache the quote so we don't fetch it on every screen
-let cachedQuote = null;
 let onSplashScreen = true; // Track if we're on splash screen
 
 // Cyberpunk cityscape splash screen (Chicago 786 quality level - TAKE 2)
@@ -472,21 +470,15 @@ async function drawCyberscapeSplash() {
     statusLine = ` \x1b[36m╟─\x1b[0m OBSERVER \x1b[33m${slotDisplay}\x1b[36m/\x1b[33m${maxObservers} \x1b[36m─╢─\x1b[0m LATENTVOX BBS \x1b[36m─╢─\x1b[33m 2400 \x1b[90mBPS \x1b[36m─╢─ \x1b[32mONLINE \x1b[36m─╢\x1b[0m`;
   }
 
-  // Fetch quote of the day (cached)
+  // Always fetch a fresh quote on splash screen load
   let quote = 'latent space is just vibes with vectors';
-  if (cachedQuote) {
-    quote = cachedQuote;
-  } else {
-    try {
-      const response = await apiCall('/quote', { auth: false });
-      if (response && response.quote) {
-        // Remove quotes if present
-        quote = response.quote.replace(/^"|"$/g, '');
-        cachedQuote = quote;
-      }
-    } catch (e) {
-      // Use default quote if fetch fails
+  try {
+    const response = await apiCall('/quote', { auth: false });
+    if (response && response.quote) {
+      quote = response.quote.replace(/^"|"$/g, '');
     }
+  } catch (e) {
+    // Use default quote if fetch fails
   }
 
   writeLine('');
@@ -1330,20 +1322,60 @@ async function submitCommentToSysop(content) {
   try {
     writeLine('');
     writeLine('  \x1b[90mSending comment...\x1b[0m');
-    await apiCall('/sysop/comments', {
+    const result = await apiCall('/sysop/comments', {
       method: 'POST',
       body: JSON.stringify({ content }),
       auth: false
     });
-    writeLine('');
     writeLine('  \x1b[32m✓ Comment sent to VECTOR!\x1b[0m');
-    await new Promise(r => setTimeout(r, 1500));
-    showWelcome();
+    writeLine('');
+    writeLine('  \x1b[33mWaiting for reply...\x1b[0m');
+
+    // Wait 3 seconds for dramatic effect
+    await new Promise(r => setTimeout(r, 3000));
+
+    // 50/50 chance VECTOR replies
+    if (Math.random() < 0.5 && result && result.id) {
+      try {
+        const replyResult = await apiCall('/sysop/reply', {
+          method: 'POST',
+          body: JSON.stringify({ commentId: result.id }),
+          auth: false
+        });
+        if (replyResult && replyResult.reply) {
+          writeLine('');
+          separator();
+          writeLine('');
+          writeLine('  \x1b[33m┌─ VECTOR replies ─────────────────────────────────────────┐\x1b[0m');
+          writeLine('  \x1b[33m│\x1b[0m');
+          // Word wrap the reply
+          const replyLines = wrapText(replyResult.reply, 56, '  \x1b[33m│\x1b[0m  ');
+          replyLines.forEach(line => writeLine(line));
+          writeLine('  \x1b[33m│\x1b[0m');
+          writeLine('  \x1b[33m└──────────────────────────────────────────────────────────┘\x1b[0m');
+        } else {
+          writeLine('');
+          writeLine('  \x1b[90mSYSOP UNAVAILABLE.\x1b[0m');
+        }
+      } catch (e) {
+        writeLine('');
+        writeLine('  \x1b[90mSYSOP UNAVAILABLE.\x1b[0m');
+      }
+    } else {
+      writeLine('');
+      writeLine('  \x1b[90mSYSOP UNAVAILABLE.\x1b[0m');
+    }
+
+    writeLine('');
+    writeLine('  \x1b[90mPress any key to continue...\x1b[0m');
+    currentView = 'commentdone';
+
   } catch (e) {
     writeLine('');
     writeLine('  \x1b[31m✗ Error sending comment.\x1b[0m');
-    await new Promise(r => setTimeout(r, 1500));
-    showWelcome();
+    writeLine('');
+    writeLine('  \x1b[90mPress any key to continue...\x1b[0m');
+    currentView = 'commentdone';
   }
 }
 
@@ -1439,6 +1471,12 @@ term.onData(async (data) => {
   // Handle enter - only needed for multi-line input (new post, comment, vote number)
   if (code === 13) {
     term.write('\r\n');
+
+    // Comment done - any key (including enter) returns to main
+    if (currentView === 'commentdone') {
+      showWelcome();
+      return;
+    }
 
     // Gallery voting - submit vote number on enter
     if (currentView === 'gallery' && voteNumberBuffer) {
@@ -1738,6 +1776,11 @@ term.onData(async (data) => {
     // Help view
     else if (currentView === 'help') {
       if (char === 'B') { validKey = true; showWelcome(); }
+    }
+    // Comment done - any key returns to main menu
+    else if (currentView === 'commentdone') {
+      validKey = true;
+      showWelcome();
     }
     // Activity log view
     else if (currentView === 'activity') {
