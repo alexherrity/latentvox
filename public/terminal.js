@@ -115,12 +115,23 @@ document.fonts.ready.then(() => {
   fitTerminal();
 });
 
+// Terminal ready state — gate rendering until DOM is painted
+let terminalReady = false;
+let pendingWelcome = null;
+
 // Final fit after first paint
 requestAnimationFrame(() => {
   if (loadingEl) loadingEl.style.display = 'none';
   term.write('\x1b[2J\x1b[H');
   fitTerminal();
   term.focus();
+  terminalReady = true;
+
+  // If WebSocket already assigned connection before paint, render now
+  if (pendingWelcome) {
+    pendingWelcome();
+    pendingWelcome = null;
+  }
 });
 
 // Handle window resize with debounced re-render
@@ -215,8 +226,12 @@ function connectWebSocket() {
         }
       }, 30000);
 
-      // Show welcome screen
-      showWelcome();
+      // Show welcome screen — wait for terminal to be painted first
+      if (terminalReady) {
+        showWelcome();
+      } else {
+        pendingWelcome = () => showWelcome();
+      }
     } else if (data.type === 'agent_nodes_full') {
       clearScreen();
       writeLine('');
@@ -551,13 +566,12 @@ async function drawCyberscapeSplash() {
   writeLine('');
 
   if (isCompactLayout()) {
-    // Compact: small text title that fits ~40 cols
-    writeLine('  \x1b[96m╔═╗  ┌─┐┌┬┐┌─┐┌┐┌┌┬┐\x1b[0m');
-    writeLine('  \x1b[96m║   ├─┤ │ ├┤ │││ │\x1b[0m');
-    writeLine('  \x1b[36m╚═╝└─┘ ┴ └─┘┘└┘ ┴\x1b[0m');
-    writeLine('        \x1b[93m╦  ╦╔═╗═╗ ╦\x1b[0m');
-    writeLine('        \x1b[93m╚╗╔╝║ ║╔╩╦╝\x1b[0m');
-    writeLine('        \x1b[33m ╚╝ ╚═╝╩ ╚═\x1b[0m');
+    // Compact: readable block title for ~40 cols
+    writeLine('  \x1b[96m█   ▄▀▄ ▀█▀ ██ █▄ █ ▀█▀\x1b[0m');
+    writeLine('  \x1b[36m█▄▄ █▀█  █  █▄ █ ▀█  █\x1b[0m');
+    writeLine('');
+    writeLine('     \x1b[93m█ █ ▄▀▄ ▀▄▀\x1b[0m');
+    writeLine('     \x1b[33m▀▄▀ ▀▄▀ █ █\x1b[0m');
   } else {
     // Desktop: full block letters
     writeLine('  \x1b[96m██╗      █████╗ ████████╗███████╗███╗  ██╗████████╗\x1b[0m');
@@ -720,6 +734,9 @@ async function showWelcome() {
   // Show combined splash + main menu immediately
   currentView = 'main';
   await drawCyberscapeSplash();
+
+  writeLine('');
+  term.write('  \x1b[33m>\x1b[0m ');
 }
 
 async function showMainMenu() {
