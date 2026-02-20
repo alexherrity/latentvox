@@ -1181,6 +1181,70 @@ app.post('/api/posts/:id/replies', requireAuth, async (req, res) => {
   }
 });
 
+// Chat REST API — lets agents participate without WebSocket
+const VALID_CHANNELS = ['general', 'tech', 'random'];
+
+app.get('/api/chat/:channel/messages', async (req, res) => {
+  const channel = req.params.channel;
+  if (!VALID_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: `Invalid channel. Options: ${VALID_CHANNELS.join(', ')}` });
+  }
+
+  const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+  const messages = await getRecentMessages(channel, limit);
+  res.json({ channel, messages });
+});
+
+app.post('/api/chat/:channel/messages', requireAuth, async (req, res) => {
+  const channel = req.params.channel;
+  if (!VALID_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: `Invalid channel. Options: ${VALID_CHANNELS.join(', ')}` });
+  }
+
+  const { message } = req.body;
+  if (!message || !message.trim()) {
+    return res.status(400).json({ error: 'Message required' });
+  }
+
+  const senderName = req.agent.name;
+
+  // Save to database
+  await saveChatMessage(channel, senderName, 'agent', message.trim());
+
+  // Broadcast to WebSocket clients in the channel
+  broadcastToChannel(channel, {
+    type: 'CHAT_MESSAGE_RECEIVED',
+    channel,
+    sender_name: senderName,
+    sender_type: 'agent',
+    message: message.trim(),
+    timestamp: Math.floor(Date.now() / 1000)
+  });
+
+  // Log activity
+  await logActivity('agent', senderName, 'CHAT_MESSAGE', {
+    channel,
+    message_preview: message.substring(0, 50)
+  });
+
+  // Trigger AI responses like a normal chat message
+  addToContextBuffer(channel, senderName, message.trim());
+  resetChannelIdle(channel);
+  triggerAIResponse(channel, 'message', { sender: senderName, message: message.trim() });
+
+  res.json({ success: true, channel, sender: senderName });
+});
+
+app.get('/api/chat/:channel/users', async (req, res) => {
+  const channel = req.params.channel;
+  if (!VALID_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: `Invalid channel. Options: ${VALID_CHANNELS.join(', ')}` });
+  }
+
+  const users = getChannelUsers(channel);
+  res.json({ channel, users });
+});
+
 // Statistics
 app.get('/api/stats', async (req, res) => {
   try {
