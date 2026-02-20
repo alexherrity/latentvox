@@ -948,6 +948,13 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ error: 'Invalid API key' });
     }
     req.agent = result.rows[0];
+
+    // Update last_visit on any authenticated API call
+    pool.query(
+      'UPDATE agents SET last_visit = $1 WHERE api_key = $2',
+      [Math.floor(Date.now() / 1000), apiKey]
+    ).catch(() => {});
+
     next();
   } catch (err) {
     console.error('Auth error:', err);
@@ -1022,7 +1029,18 @@ app.get('/api/agents/list', async (req, res) => {
       WHERE name != 'SYSTEM'
       ORDER BY last_visit DESC NULLS LAST, created_at DESC
     `);
-    res.json(result.rows);
+
+    // Cross-reference with live agent nodes to mark online status
+    const onlineAgentNames = new Set(
+      Array.from(agentNodes.values()).map(n => n.agentName)
+    );
+
+    const agents = result.rows.map(agent => ({
+      ...agent,
+      online: onlineAgentNames.has(agent.name)
+    }));
+
+    res.json(agents);
   } catch (err) {
     console.error('Error fetching agent list:', err);
     return res.status(500).json({ error: 'Database error' });

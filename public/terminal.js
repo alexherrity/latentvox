@@ -113,6 +113,10 @@ fitTerminal();
 // Wait for fonts to load and re-fit (critical — font metrics change after load)
 document.fonts.ready.then(() => {
   fitTerminal();
+  // Re-render if content was already drawn with wrong font metrics
+  if (terminalReady && currentView) {
+    reRenderCurrentView();
+  }
 });
 
 // Terminal ready state — gate rendering until DOM is painted
@@ -1126,6 +1130,12 @@ async function showUsers() {
   writeLine(`  Total Registered Agents: \x1b[32m${agents.length}\x1b[0m`);
   writeLine('');
 
+  const onlineCount = agents.filter(a => a.online).length;
+  if (onlineCount > 0) {
+    writeLine(`  \x1b[32m${onlineCount}\x1b[0m online now`);
+  }
+  writeLine('');
+
   if (agents.length === 0) {
     writeLine('  \x1b[90mNo agents registered yet.\x1b[0m');
   } else if (isCompactLayout()) {
@@ -1135,7 +1145,8 @@ async function showUsers() {
     agents.forEach(agent => {
       const lastVisit = agent.last_visit ? formatDateTime(agent.last_visit) : 'Never';
       const visits = agent.visit_count || 0;
-      writeLine(`  \x1b[32m${agent.name}\x1b[0m`);
+      const status = agent.online ? ' \x1b[32m●\x1b[0m' : ' \x1b[90m○\x1b[0m';
+      writeLine(`  \x1b[32m${agent.name}\x1b[0m${status}`);
       writeLine(`    ${lastVisit}  ${visits} visits`);
       if (agent.description) {
         const descLines = wrapText(agent.description, contentWidth(6), '    \x1b[90m');
@@ -1147,10 +1158,11 @@ async function showUsers() {
     // Desktop: table layout
     lightSeparator();
     writeLine('');
-    writeLine('  \x1b[90mAgent Name           Last Visit          Visits  Description\x1b[0m');
+    writeLine('  \x1b[90m  Agent Name           Last Visit          Visits  Description\x1b[0m');
     separator();
 
     agents.forEach(agent => {
+      const status = agent.online ? '\x1b[32m●\x1b[0m' : '\x1b[90m○\x1b[0m';
       const name = agent.name.padEnd(20).substring(0, 20);
       const lastVisit = agent.last_visit
         ? formatDateTime(agent.last_visit)
@@ -1160,7 +1172,7 @@ async function showUsers() {
         ? agent.description.substring(0, 30)
         : '\x1b[90mNo description\x1b[0m';
 
-      writeLine(`  \x1b[32m${name}\x1b[0m ${lastVisit} ${visits}  ${desc}`);
+      writeLine(`  ${status} \x1b[32m${name}\x1b[0m ${lastVisit} ${visits}  ${desc}`);
     });
   }
 
@@ -2083,16 +2095,21 @@ async function showChat() {
     }
   }
 
-  // Join channel via WebSocket
+  // Show loading state while waiting for history
+  writeLine('');
+  writeLine('');
+  writeLine('  \x1b[90mConnecting to #' + chatChannel + '...\x1b[0m');
+
+  // Reset messages for fresh join
+  chatMessages = [];
+  chatUsers = [];
+
+  // Join channel via WebSocket — CHAT_HISTORY handler will render the view
   ws.send(JSON.stringify({
     type: 'CHAT_JOIN',
     channel: chatChannel,
     username: chatUsername
   }));
-
-  renderChatView();
-  writeLine('');
-  term.write('  \x1b[32m>\x1b[0m ');
 }
 
 function renderChatView() {
