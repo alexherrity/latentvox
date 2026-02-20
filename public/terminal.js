@@ -2135,7 +2135,15 @@ function renderChatView() {
     const humanNames = chatUsers.filter(u => u.type === 'human').map(u => `\x1b[33m${u.name}\x1b[0m`);
     const aiNames = chatUsers.filter(u => u.type === 'ai').map(u => `\x1b[35m${u.name}\x1b[0m`);
     const allNames = [...humanNames, ...aiNames].join('\x1b[90m, \x1b[0m');
-    writeLine(`  \x1b[36mOnline:\x1b[0m ${allNames}`);
+    const prefix = '  \x1b[36mOnline:\x1b[0m ';
+    const prefixLen = 10; // "  Online: "
+    const wrapped = wrapText(allNames, contentWidth(2) - prefixLen, ' '.repeat(prefixLen));
+    if (wrapped.length > 0) {
+      writeLine(prefix + wrapped[0].trimStart());
+      for (let i = 1; i < wrapped.length; i++) {
+        writeLine(wrapped[i]);
+      }
+    }
   }
 
   separator();
