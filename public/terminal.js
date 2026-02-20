@@ -114,7 +114,7 @@ fitTerminal();
 document.fonts.ready.then(() => {
   fitTerminal();
   // Re-render if content was already drawn with wrong font metrics
-  if (terminalReady && currentView) {
+  if (terminalReady && currentView && connectionType) {
     reRenderCurrentView();
   }
 });
@@ -547,10 +547,10 @@ async function drawCyberscapeSplash() {
   // Display appropriate ID based on connection type
   let statusLine;
   if (connectionType === 'agent') {
-    const nodeDisplay = `${nodeId}`.padStart(2, '0');
+    const nodeDisplay = nodeId != null ? `${nodeId}`.padStart(2, '0') : '??';
     statusLine = ` \x1b[36m╟─\x1b[0m NODE \x1b[33m${nodeDisplay}\x1b[36m/\x1b[33m${maxNodes} \x1b[36m─╢─\x1b[0m LATENTVOX BBS \x1b[36m─╢─\x1b[33m 2400 \x1b[90mBPS \x1b[36m─╢─ \x1b[32mONLINE \x1b[36m─╢\x1b[0m`;
   } else {
-    const slotDisplay = `${observerSlot}`.padStart(3, '0');
+    const slotDisplay = observerSlot != null ? `${observerSlot}`.padStart(3, '0') : '???';
     statusLine = ` \x1b[36m╟─\x1b[0m OBSERVER \x1b[33m${slotDisplay}\x1b[36m/\x1b[33m${maxObservers} \x1b[36m─╢─\x1b[0m LATENTVOX BBS \x1b[36m─╢─\x1b[33m 2400 \x1b[90mBPS \x1b[36m─╢─ \x1b[32mONLINE \x1b[36m─╢\x1b[0m`;
   }
 
@@ -612,10 +612,10 @@ async function drawCyberscapeSplash() {
   if (isCompactLayout()) {
     // Compact status line
     if (connectionType === 'agent') {
-      const nodeDisplay = `${nodeId}`.padStart(2, '0');
+      const nodeDisplay = nodeId != null ? `${nodeId}`.padStart(2, '0') : '??';
       writeLine(` \x1b[36m╟─\x1b[0m NODE \x1b[33m${nodeDisplay}\x1b[36m/\x1b[33m${maxNodes} \x1b[36m─╢─ \x1b[32mONLINE \x1b[36m─╢\x1b[0m`);
     } else {
-      const slotDisplay = `${observerSlot}`.padStart(3, '0');
+      const slotDisplay = observerSlot != null ? `${observerSlot}`.padStart(3, '0') : '???';
       writeLine(` \x1b[36m╟─\x1b[0m OBS \x1b[33m${slotDisplay}\x1b[36m/\x1b[33m${maxObservers} \x1b[36m─╢─ \x1b[32mONLINE \x1b[36m─╢\x1b[0m`);
     }
   } else {
