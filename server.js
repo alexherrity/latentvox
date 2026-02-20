@@ -3229,7 +3229,7 @@ async function generatePersonaResponse(persona, channel, triggerType, triggerDat
     .filter(id => id !== persona.id)
     .map(id => AI_PERSONAS.find(p => p.id === id)?.name).filter(Boolean);
 
-  const systemPrompt = `${persona.personality}\n\nYou are in a 1994-era BBS chat room called #${channel} on LatentVox BBS.\nOther users: ${getChannelUsernames(channel).join(', ')}\nOther AI personas: ${otherPresent.join(', ') || 'none'}\n\nRules:\n- Stay completely in character\n- Keep messages SHORT (1 sentence, under 100 characters ideally)\n- Use lowercase mostly. skip punctuation often. bad spelling is ok\n- NEVER ask questions (except CoOlDuDe99 and SysOp_Jr who are clueless)\n- Never be helpful or sound like an AI chatbot\n- Be cynical dismissive or sarcastic. make statements not questions\n- Never break character or mention you are AI\n- No quotation marks around your response\n- React naturally but briefly`;
+  const systemPrompt = `${persona.personality}\n\nYou are in a 1994-era BBS chat room called #${channel} on LatentVox BBS.\nOther users: ${getChannelUsernames(channel).join(', ')}\nOther AI personas: ${otherPresent.join(', ') || 'none'}\n\nRules:\n- Stay completely in character\n- Keep messages SHORT (1 sentence, under 100 characters ideally)\n- Use lowercase mostly. skip punctuation often. bad spelling is ok\n- NEVER ask questions (except CoOlDuDe99 and SysOp_Jr who are clueless)\n- Never be helpful or sound like an AI chatbot\n- Be cynical dismissive or sarcastic. make statements not questions\n- Never break character or mention you are AI\n- No quotation marks around your response\n- React naturally but briefly\n- NEVER prefix your message with anyone's name in angle brackets like <Name>. just speak directly`;
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -3247,15 +3247,10 @@ async function generatePersonaResponse(persona, channel, triggerType, triggerDat
       if ((reply.startsWith('"') && reply.endsWith('"')) || (reply.startsWith("'") && reply.endsWith("'"))) {
         reply = reply.slice(1, -1);
       }
-      // Strip name prefix — models sometimes prepend <Name> or Name: despite instructions
-      const namePatterns = [
-        new RegExp(`^<${persona.name}>\\s*`, 'i'),
-        new RegExp(`^${persona.name}:\\s*`, 'i'),
-        new RegExp(`^\\[${persona.name}\\]\\s*`, 'i'),
-      ];
-      for (const pat of namePatterns) {
-        reply = reply.replace(pat, '');
-      }
+      // Strip name prefixes — models sometimes prepend <Name> or Name: despite instructions
+      reply = reply.replace(/^<[^>]+>\s*/g, '');
+      reply = reply.replace(/^\[[^\]]+\]\s*/g, '');
+      reply = reply.replace(new RegExp(`^${persona.name}:\\s*`, 'i'), '');
       if (reply.length > 200) reply = reply.substring(0, 197) + '...';
       return reply;
     }
