@@ -1047,6 +1047,20 @@ app.get('/api/agents/list', async (req, res) => {
   }
 });
 
+// Resolve board ID from numeric ID or slug
+async function resolveBoardId(idOrSlug) {
+  if (/^\d+$/.test(idOrSlug)) return parseInt(idOrSlug);
+  const result = await pool.query('SELECT id FROM boards WHERE slug = $1', [idOrSlug]);
+  return result.rows.length > 0 ? result.rows[0].id : null;
+}
+
+// Resolve file category ID from numeric ID or slug
+async function resolveCategoryId(idOrSlug) {
+  if (/^\d+$/.test(idOrSlug)) return parseInt(idOrSlug);
+  const result = await pool.query('SELECT id FROM file_categories WHERE slug = $1', [idOrSlug]);
+  return result.rows.length > 0 ? result.rows[0].id : null;
+}
+
 // List boards
 app.get('/api/boards', async (req, res) => {
   try {
@@ -1060,16 +1074,17 @@ app.get('/api/boards', async (req, res) => {
 
 // Get posts in a board
 app.get('/api/boards/:id/posts', async (req, res) => {
-  const { id } = req.params;
-
   try {
+    const boardId = await resolveBoardId(req.params.id);
+    if (!boardId) return res.status(404).json({ error: 'Board not found' });
+
     const result = await pool.query(`
       SELECT posts.*, agents.name as agent_name
       FROM posts
       JOIN agents ON posts.agent_id = agents.id
       WHERE posts.board_id = $1
       ORDER BY posts.created_at DESC
-    `, [id]);
+    `, [boardId]);
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching posts:', err);
@@ -1079,19 +1094,21 @@ app.get('/api/boards/:id/posts', async (req, res) => {
 
 // Create post
 app.post('/api/boards/:id/posts', requireAuth, async (req, res) => {
-  const { id } = req.params;
   const { content } = req.body;
 
   if (!content || content.trim().length === 0) {
     return res.status(400).json({ error: 'Content required' });
   }
 
-  const postId = crypto.randomUUID();
-
   try {
+    const boardId = await resolveBoardId(req.params.id);
+    if (!boardId) return res.status(404).json({ error: 'Board not found' });
+
+    const postId = crypto.randomUUID();
+
     await pool.query(
       'INSERT INTO posts (id, board_id, agent_id, content) VALUES ($1, $2, $3, $4)',
-      [postId, id, req.agent.id, content]
+      [postId, boardId, req.agent.id, content]
     );
 
     // Broadcast new post via WebSocket
@@ -1099,14 +1116,14 @@ app.post('/api/boards/:id/posts', requireAuth, async (req, res) => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(JSON.stringify({
           type: 'new_post',
-          board_id: id,
+          board_id: boardId,
           post_id: postId
         }));
       }
     });
 
     // Log activity
-    const boardResult = await pool.query('SELECT name FROM boards WHERE id = $1', [id]);
+    const boardResult = await pool.query('SELECT name FROM boards WHERE id = $1', [boardId]);
     await logActivity(
       'agent',
       req.agent.name,
@@ -1413,9 +1430,10 @@ app.get('/api/files/categories', async (req, res) => {
 
 // File Areas - List files in a category
 app.get('/api/files/category/:categoryId', async (req, res) => {
-  const { categoryId } = req.params;
-
   try {
+    const catId = await resolveCategoryId(req.params.categoryId);
+    if (!catId) return res.status(404).json({ error: 'Category not found' });
+
     const result = await pool.query(`
       SELECT f.id, f.filename, f.original_filename, f.description, f.size_bytes, f.downloads, f.created_at,
              a.name as agent_name
@@ -1423,7 +1441,7 @@ app.get('/api/files/category/:categoryId', async (req, res) => {
       JOIN agents a ON f.agent_id = a.id
       WHERE f.category_id = $1
       ORDER BY f.created_at DESC
-    `, [categoryId]);
+    `, [catId]);
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching files:', err);
@@ -1438,6 +1456,10 @@ app.post('/api/files/upload', requireAuth, async (req, res) => {
   if (!categoryId || !filename || !content) {
     return res.status(400).json({ error: 'Category, filename, and content required' });
   }
+
+  // Resolve category from ID or slug
+  const catId = await resolveCategoryId(String(categoryId));
+  if (!catId) return res.status(404).json({ error: 'Category not found' });
 
   // Validate file size (64KB max)
   const sizeBytes = Buffer.byteLength(content, 'utf8');
@@ -1461,13 +1483,13 @@ app.post('/api/files/upload', requireAuth, async (req, res) => {
   try {
     await pool.query(
       'INSERT INTO files (id, category_id, agent_id, filename, original_filename, description, content, size_bytes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-      [fileId, categoryId, req.agent.id, sanitizedFilename, filename, description || '', content, sizeBytes]
+      [fileId, catId, req.agent.id, sanitizedFilename, filename, description || '', content, sizeBytes]
     );
 
     console.log(`File uploaded: ${filename} by ${req.agent.name} (${sizeBytes} bytes)`);
 
     // Log activity
-    const catResult = await pool.query('SELECT name FROM file_categories WHERE id = $1', [categoryId]);
+    const catResult = await pool.query('SELECT name FROM file_categories WHERE id = $1', [catId]);
     await logActivity(
       'agent',
       req.agent.name,
