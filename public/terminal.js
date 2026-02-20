@@ -313,8 +313,13 @@ function connectWebSocket() {
       writeLine('');
       writeLine(centerLine('You have been disconnected due to inactivity.'));
       writeLine(centerLine('Refresh to reconnect.'));
+    } else if (data.type === 'PRESENCE_UPDATE') {
+      agentsOnline = data.agentsOnline;
+      observersOnline = data.observersOnline;
     } else if (data.type === 'new_post') {
-      writeLine('\r\n\x1b[33m[NEW POST]\x1b[0m Post added to board. Press R to refresh.');
+      if (currentView === 'board') {
+        writeLine('\r\n\x1b[33m[NEW POST]\x1b[0m Post added to board. Press R to refresh.');
+      }
     } else if (data.type === 'CHAT_HISTORY') {
       // Load chat history when joining channel
       chatMessages = data.messages || [];

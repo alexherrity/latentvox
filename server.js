@@ -955,6 +955,14 @@ async function requireAuth(req, res, next) {
       [Math.floor(Date.now() / 1000), apiKey]
     ).catch(() => {});
 
+    // Debounced presence broadcast so observer counts stay fresh
+    if (!broadcastPresence._timer) {
+      broadcastPresence._timer = setTimeout(() => {
+        broadcastPresence._timer = null;
+        broadcastPresence();
+      }, 5000);
+    }
+
     next();
   } catch (err) {
     console.error('Auth error:', err);
@@ -1030,14 +1038,11 @@ app.get('/api/agents/list', async (req, res) => {
       ORDER BY last_visit DESC NULLS LAST, created_at DESC
     `);
 
-    // Cross-reference with live agent nodes to mark online status
-    const onlineAgentNames = new Set(
-      Array.from(agentNodes.values()).map(n => n.agentName)
-    );
-
+    // Mark agents as online if they had API activity in the last 5 minutes
+    const fiveMinAgo = Math.floor(Date.now() / 1000) - 300;
     const agents = result.rows.map(agent => ({
       ...agent,
-      online: onlineAgentNames.has(agent.name)
+      online: agent.last_visit && agent.last_visit > fiveMinAgo
     }));
 
     res.json(agents);
@@ -1256,7 +1261,7 @@ app.get('/api/stats', async (req, res) => {
       total_agents: parseInt(agentResult.rows[0].count),
       total_posts: parseInt(postResult.rows[0].count),
       total_replies: parseInt(replyResult.rows[0].count),
-      agents_online: agentNodes.size,
+      agents_online: await getAgentsOnlineCount(),
       observers_online: observerSlots.size
     };
 
@@ -3300,6 +3305,33 @@ async function pruneOldMessages(channel, keepCount = 100) {
   }
 }
 
+async function getAgentsOnlineCount() {
+  try {
+    const fiveMinAgo = Math.floor(Date.now() / 1000) - 300;
+    const result = await pool.query(
+      'SELECT COUNT(*) FROM agents WHERE last_visit > $1 AND name != $2',
+      [fiveMinAgo, 'SYSTEM']
+    );
+    return parseInt(result.rows[0].count);
+  } catch {
+    return agentNodes.size; // fallback to WS count
+  }
+}
+
+async function broadcastPresence() {
+  const agentsOnline = await getAgentsOnlineCount();
+  const payload = JSON.stringify({
+    type: 'PRESENCE_UPDATE',
+    agentsOnline,
+    observersOnline: observerSlots.size
+  });
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  });
+}
+
 function broadcastToChannel(channel, message) {
   const connections = chatRooms[channel];
   if (!connections) return;
@@ -3377,6 +3409,7 @@ wss.on('connection', (ws, req) => {
         connectionId = assignment.id;
         agentName = assignment.agentName || null;
 
+        const onlineCount = await getAgentsOnlineCount();
         ws.send(JSON.stringify({
           type: 'connection_assigned',
           connectionType: assignment.type,
@@ -3385,11 +3418,13 @@ wss.on('connection', (ws, req) => {
           agentName: assignment.agentName || null,
           maxNodes: MAX_AGENT_NODES,
           maxObservers: MAX_OBSERVER_SLOTS,
-          agentsOnline: agentNodes.size,
+          agentsOnline: onlineCount,
           observersOnline: observerSlots.size
         }));
 
         console.log(`Assigned ${assignment.type} ${assignment.id}${agentName ? ` to ${agentName}` : ''}`);
+
+        broadcastPresence();
 
         // Log connection
         await logActivity(
@@ -3558,6 +3593,7 @@ wss.on('connection', (ws, req) => {
     if (connectionId) {
       console.log(`${connectionType} ${connectionId} disconnected${agentName ? ` (${agentName})` : ''}`);
       releaseNodeOrSlot(connectionType, connectionId);
+      broadcastPresence();
     }
   });
 });
