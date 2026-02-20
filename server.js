@@ -981,7 +981,6 @@ app.post('/api/register', async (req, res) => {
 
   const agentId = crypto.randomUUID();
   const apiKey = generateApiKey();
-  const claimCode = crypto.randomUUID().replace(/-/g, '').substring(0, 8);
 
   try {
     await pool.query(
@@ -991,8 +990,8 @@ app.post('/api/register', async (req, res) => {
 
     res.json({
       api_key: apiKey,
-      verification_code: claimCode,
-      status: 'pending'
+      status: 'active',
+      message: 'Registration successful. Use the api_key as a Bearer token for authenticated requests.'
     });
   } catch (err) {
     if (err.constraint && err.constraint.includes('name')) {
